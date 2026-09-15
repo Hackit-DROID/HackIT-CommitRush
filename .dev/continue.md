@@ -1,941 +1,372 @@
-# HackIT CommitRush --- Project Context
+# HackIT CommitRush — Execution Workflow (`continue.md`)
 
-------------------------------------------------------------------------
+---
 
-## 1. Purpose of This Document
+## 1. Purpose
 
-`context.md` is the **current-state** document for this project. It
-tells anyone entering the repository --- human or AI agent --- what
-CommitRush is, what has actually been decided, what has actually been
-built, and what remains unknown or unresolved.
+**This document controls:** the operational loop an AI coding agent follows to select, execute, validate, and hand off one unit of work safely, and to decide what happens next.
 
--   **PRD.md** defines *what the product must do*.
--   **`.dev/plan.md`** defines *what must be built and in what order*.
--   **`.dev/context.md`** (this file) defines *what the project
-    currently is, what is decided, what is done, and what agents must
-    respect before touching anything*.
+**This document does NOT control:**
+- Product requirements or acceptance criteria — `PRD.md`
+- Execution order, task IDs, dependencies, or checkpoints — `.dev/plan.md`
+- Current implementation state, decisions, or ambiguities — `.dev/context.md`
+- Agent ownership, review requirements, or contracts — `.dev/awsmap.md`
 
-This is not a second PRD and not a task plan. Read it before selecting
-or executing work.
-
-`.dev/` is internal AI-development orchestration context. It is
-gitignored, is **not application source code**, and must never be
-exposed through application functionality.
-
-------------------------------------------------------------------------
-
-## 2. Project Identity
-
-  ---------------------------------------------------------------------------------------
-  Field                               Value
-  ----------------------------------- ---------------------------------------------------
-  Project                             HackIT CommitRush
+`continue.md` does not repeat what those documents contain. It tells an agent **how** to use them correctly. Where anything here appears to conflict with PRD.md, plan.md, context.md, or awsmap.md, **those win and this document is wrong** — stop and escalate rather than acting on the conflicting instruction here.
 
-  Repository                          https://github.com/Hackit-DROID/HackIT-CommitRush
-
-  Stated working tree                 `.dev/`, `backend/`, `frontend/`, `.gitignore`
-                                      (root directory name given as `OxideAuth/` --- see
-                                      §11, AMB-9)
-
-  Scale target (PRD)                  500 participants, 300 concurrent requests, 67
-                                      repos, \~1,500 issues
-
-  Timeline constraint (PRD §26)       10 days to production-ready launch
-  ---------------------------------------------------------------------------------------
+---
 
-**High-level purpose (PRD §1):** CommitRush is an event orchestration
-layer sitting on top of GitHub for a college open-source contribution
-event. GitHub remains the system of record for code, issues, PRs,
-reviews, and merges. CommitRush owns what GitHub does not: participant
-identity, issue/project discovery, contribution tracking, validation,
-daily limits, points, leaderboard, and administration.
-
-**Actors (PRD §6):**
-
-  -----------------------------------------------------------------------
-  Persona                             Role
-  ----------------------------------- -----------------------------------
-  Participant                         Student with a GitHub account,
-                                      competing for points
+## 2. Authority & Required Reading Order
 
-  Project Maintainer (internal)       HackIT member who curated a repo
-                                      --- **not a distinct system role
-                                      for launch**; managed via Django
-                                      Admin
+```
+1. PRD.md            — WHAT the product must do
+2. .dev/plan.md       — WHAT to build and in WHAT ORDER
+3. .dev/context.md    — WHAT currently IS true
+4. .dev/awsmap.md     — WHO does WHAT
+5. .dev/continue.md   — HOW to execute all of the above     [this file]
+```
 
-  Event Admin                         HackIT organizer: configures the
-                                      event, monitors the pipeline,
-                                      resolves disputes, operates
-                                      emergency controls
-
-  Spectator (unauthenticated)         Views landing page, public
-                                      leaderboard, stats
-  -----------------------------------------------------------------------
+An agent reads all four upstream documents, **in this order, in full**, before touching the repository — every session, not only the first one. Do not rely on a memory of having read them previously; documents may have changed.
 
-**System concept (PRD §10.1):** No user-facing request synchronously
-touches GitHub or the merge bot. User-facing reads are served from
-PostgreSQL (optionally via Redis cache); everything touching GitHub
-happens in Celery workers, decoupled from the request/response cycle.
+---
 
-------------------------------------------------------------------------
+## 3. Agent Startup Procedure
 
-## 3. Current Development State
-
-The project is in the **PLANNING / INITIAL SETUP** stage. Nothing in the
-table below is marked implemented, because no supplied material confirms
-implementation.
-
-  -----------------------------------------------------------------------
-  Area                    Status                  Notes
-  ----------------------- ----------------------- -----------------------
-  Product requirements    **Complete**            PRD.md exists and is
-                                                  authoritative. Contains
-                                                  7 explicit open
-                                                  questions (§29).
-
-  Project planning        **Complete**            `.dev/plan.md` exists:
-                                                  10 modules (M1--M10),
-                                                  \~60 tasks, checkpoints
-                                                  and dependencies
-                                                  defined.
-
-  Project context         **Complete**            `.dev/context.md`
-                                                  exists and records
-                                                  current state.
-
-  Agent mapping           **Not created**         Planned future
-  (`awsmap.md`)                                   document; filename is
-                                                  canonicalized as
-                                                  `.dev/awsmap.md`.
-
-  Continuation doc        **Not created**         Planned future
-  (`continue.md`)                                 document.
-
-  Backend                 **Not confirmed         `backend/` directory
-                          implemented**           reported to exist;
-                                                  contents unverified.
-                                                  Plan module M1
-                                                  (scaffolding) not
-                                                  confirmed started.
-
-  Frontend                **Not confirmed         `frontend/` directory
-                          implemented**           reported to exist;
-                                                  contents unverified.
-
-  Database                **Not confirmed         Schema fully specified
-                          implemented**           in PRD §15; no
-                                                  migrations confirmed to
-                                                  exist.
-
-  GitHub integration      **Not confirmed         Specified PRD §8.1,
-  (OAuth)                 implemented**           §13.1; planned M1-T3.
-
-  GitHub read-side sync   **Not confirmed         Specified PRD §13.5,
-                          implemented**           §13.6; planned M2.
-
-  Webhooks                **Not confirmed         Specified PRD
-                          implemented**           §13.2--§13.4; planned
-                                                  M4. **Blocked by open
-                                                  question AMB-1.**
-
-  Contribution pipeline   **Not confirmed         Specified PRD §11, §22;
-  (state machine +        implemented**           planned M5.
-  validation)                                     
-
-  Merge system            **Not confirmed         Specified PRD §12;
-                          implemented**           planned M6. **Blocked
-                                                  by open question AMB-2
-                                                  (merge bot interface
-                                                  undefined).**
-
-  Points & daily limits   **Not confirmed         Specified PRD §14;
-                          implemented**           planned M6.
-
-  Leaderboard / dashboard **Not confirmed         Specified PRD §8.6,
-  / profile               implemented**           §16; planned M7.
-
-  Admin / operations      **Not confirmed         Specified PRD §18;
-                          implemented**           planned M8.
-
-  Testing                 **Not started           Strategy defined PRD
-                          (unconfirmed)**         §24; planned per-module
-                                                  plus dedicated pass M9.
-
-  Deployment              **Not started           Architecture defined
-                          (unconfirmed)**         PRD §25; planned M10.
-  -----------------------------------------------------------------------
-
-> A task appearing in `plan.md` means it is **planned**, never that it
-> is **done**. Verify the repository before claiming any of the above
-> has changed.
-
-------------------------------------------------------------------------
-
-## 4. Authoritative Documents
-
-  --------------------------------------------------------------------------
-  Document             Exists?           Role              Authority
-  -------------------- ----------------- ----------------- -----------------
-  `PRD.md`             **Yes**           Product           **1 --- highest**
-                                         requirements,     
-                                         priorities        
-                                         (P0/P1/P2),       
-                                         architecture      
-                                         decisions,        
-                                         acceptance        
-                                         criteria          
-
-  `.dev/plan.md`       **Yes**           Execution order,  2
-                                         modules           
-                                         (M1--M10), tasks, 
-                                         dependencies,     
-                                         checkpoints       
-
-  `.dev/context.md`    **Yes** (this     Current project   3
-                       file)             state and         
-                                         accumulated       
-                                         development       
-                                         context           
-
-  `.dev/awsmap.md`     **No ---          Maps plan         ---
-                       planned**         modules/tasks to  
-                                         appropriate AI    
-                                         agents, skills,   
-                                         and workflows     
-
-  `.dev/continue.md`   **No ---          Execution         ---
-                       planned**         instructions for  
-                                         the primary       
-                                         coding agent:     
-                                         inspect context,  
-                                         select next task, 
-                                         consult the agent 
-                                         map, execute,     
-                                         update context,   
-                                         follow the        
-                                         checkpoint        
-                                         workflow          
-  --------------------------------------------------------------------------
-
-**Intended relationship:**
-
-    PRD.md
-      ↓
-    .dev/plan.md
-      ↓
-    .dev/context.md  +  .dev/awsmap.md
-      ↓
-    .dev/continue.md  (execution / continuation)
-
-**Conflict rule:** if these documents disagree, do **not** silently
-resolve it. PRD.md wins on product requirements; plan.md wins on
-sequencing. Record the conflict in §11 of this document and escalate.
-
-**Naming note:** the plan document internally refers to the
-agent-mapping file as `ASWmap.md`; the current task brief calls it
-`awsmap.md`. See AMB-10 --- confirm one spelling before creating the
-file, so two competing files are not produced.
-
-------------------------------------------------------------------------
-
-## 5. Product / System Understanding
-
-Summarized at the level an agent needs before working. Detail lives in
-the PRD.
-
--   **Authentication (§8.1, §13.1):** GitHub OAuth only --- no manual
-    username entry. Authorization Code flow with `state` CSRF
-    protection. Session-based auth for the SPA. `github_id` is the
-    immutable identity key; `username`/`avatar_url` are cached and
-    refreshed at login. Revoked OAuth grants must re-prompt, not
-    hard-fail.
--   **Participants (§6, §15):** Event profile extending the Django user,
-    carrying GitHub identity, suspension flag, and a denormalized point
-    total.
--   **Projects & Issues (§8.2, §13.5, §15):** Tracked repos and their
-    issues are cached locally in PostgreSQL so all discovery (search,
-    filter, sort, server-side pagination) is served from the database,
-    never from live GitHub calls. GitHub remains canonical for
-    issue/PR/repo content; CommitRush is canonical for contribution
-    lifecycle, points, and event rules.
--   **GitHub synchronization (§13.4, §13.6):** Bulk read-side import
-    plus a scheduled reconciliation sweep that catches missed or lost
-    webhooks. GitHub API usage is rate-limit aware and backs off; it
-    never blocks a user-facing request.
--   **Webhooks / events (§13.2, §13.3):** `pull_request` and `issues`
-    events. The endpoint verifies `X-Hub-Signature-256`, durably stores
-    the raw payload keyed by GitHub's delivery ID, enqueues async work,
-    and returns 200 fast. All parsing and business logic happen in the
-    async task.
--   **Contributions (§11):** The core entity --- CommitRush's view of a
-    PR raised against a tracked issue. Moves through an explicit state
-    machine (`PENDING`, `QUEUED`, `UNDER_REVIEW`/`VALIDATING`,
-    `APPROVED`, `MERGING`, `MERGED`, `REJECTED`, `FLAGGED`, `RETRY`).
-    Only `MERGED` is credited. Worker crashes are recovered by a
-    heartbeat/lock-timeout sweep --- state lives in Postgres, never in
-    worker memory.
--   **Validation (§22):** Deterministic rules plus admin review. No ML
-    fraud detection, and no trivial-diff/LOC scoring for launch
-    (explicit non-goal).
--   **Merge processing (§12):** Bounded-concurrency queue. Merge-bot
-    invocation is gated so that only a configured number (5--10) of
-    merge calls are ever active at once; the rest wait visibly in
-    `APPROVED`. FIFO by approval time with an admin priority override.
-    Separate Celery queues isolate failure domains so a merge-bot outage
-    never starves webhook intake.
--   **Points & limits (§14):** Per-issue configurable point values.
-    Points awarded only on transition to `MERGED`, exactly once, inside
-    a single transaction using per-participant-per-day row-level
-    locking. Daily limits cap **credited throughput, not
-    participation**: an over-limit merged PR is still fully recorded and
-    still reaches `MERGED`, with its point transaction recorded as
-    deferred at zero points.
--   **Leaderboard / dashboard / profile (§8.6, §16):** Cached
-    leaderboard with short TTL and a defined tie-break; a participant's
-    own rank is visible even when off the top page; leaderboard can be
-    frozen at event end. A single aggregated dashboard endpoint
-    minimizes round trips.
--   **Administration (§18):** Django Admin is the primary admin surface
-    for launch, covering participants, projects, issues, contributions,
-    event config, and a read-only audit log. A custom Ops panel is a P1
-    nice-to-have, not the launch path.
--   **Emergency controls (§18):** Pause/resume controls for pipeline
-    stages and a leaderboard freeze, held as flags read at the top of
-    the relevant task/view so they take effect without a restart. Resume
-    is always explicit and manual, never automatic.
--   **Graceful degradation (§21):** If GitHub, the merge bot, or Redis
-    is unavailable, the site stays browsable from Postgres and no
-    contribution data is lost --- work queues or defers and recovers via
-    retry/reconciliation.
-
-------------------------------------------------------------------------
-
-## 6. Core Domain Concepts
-
-PRD terminology. Do not substitute synonyms.
-
-  -----------------------------------------------------------------------
-  Concept                             Meaning
-  ----------------------------------- -----------------------------------
-  Participant                         A registered student competing in
-                                      the event; identified by immutable
-                                      GitHub id
-
-  Project                             A tracked GitHub repository
-
-  Issue                               A tracked GitHub issue belonging to
-                                      a Project, carrying an event point
-                                      value, difficulty, and category
-
-  IssueLabel                          Cached GitHub label attached to
-                                      Issues
-
-  PullRequest                         Local cache of a GitHub PR (merged
-                                      flag, head SHA, author)
-
-  Contribution                        **Core entity** --- CommitRush's
-                                      record of a PR raised against a
-                                      tracked Issue by a Participant;
-                                      carries the state machine status
-
-  PointTransaction                    Immutable ledger entry for a point
-                                      event (awarded / deferred / revoked
-                                      / admin adjustment)
-
-  DailyContributionUsage              Per-participant, per-day counters
-                                      used to enforce daily limits
-
-  EventConfig                         Singleton runtime configuration:
-                                      limits, merge concurrency, pause
-                                      switches, leaderboard freeze, event
-                                      status
-
-  WebhookEvent                        Durable record of an inbound GitHub
-                                      webhook delivery; the primary
-                                      deduplication key
-
-  AuditLog                            Trail of admin and system actions
-
-  Merge queue                         The bounded-concurrency pipeline
-                                      that drives merge processing
-
-  Merge bot                           The external component that
-                                      performs merges --- **interface not
-                                      defined in the PRD** (see AMB-2)
-
-  Reconciliation sync                 Scheduled fallback that catches
-                                      webhooks GitHub never delivered or
-                                      that were lost
-
-  Deferred points                     Points not granted because a daily
-                                      limit was reached; the contribution
-                                      is still recorded and merged
-
-  Credited state                      Only `MERGED` --- no other state
-                                      awards points
-  -----------------------------------------------------------------------
-
-Field-level schema is specified in PRD §15. Do not invent fields; where
-the PRD references a field it does not define, see §11 (AMB-4 through
-AMB-8).
-
-------------------------------------------------------------------------
-
-## 7. Established Decisions
-
-Each is supported by the cited source. These are decided, not open.
-
-  -------------------------------------------------------------------------
-  Decision                  Reason / context        Source
-  ------------------------- ----------------------- -----------------------
-  One production release,   Lets the team cut scope PRD §1
-  no MVP1/2/3; scope        under time pressure     
-  controlled via P0/P1/P2   without breaking        
-  tags                      correctness             
-
-  No user-facing request    GitHub latency/rate     PRD §10.1
-  synchronously calls       limits and merge-bot    
-  GitHub or the merge bot   instability must never  
-                            block page loads        
-
-  Backend-first sequencing; Senior instruction; PRD PRD §26, plan §1
-  a frontend feature waits  states backend for a    
-  on its API contract       resource should land    
-                            0.5--1 day ahead of its 
-                            frontend                
-
-  Fixed critical-path order PRD-established         PRD §26, plan §1
-  (auth → data model → sync dependency progression; 
-  → APIs/UI → webhooks →    not to be reordered for 
-  state machine →           convenience             
-  merge/points →                                    
-  leaderboard → admin →                             
-  testing → deploy)                                 
-
-  PostgreSQL is the         All event state lives   PRD §13.5, §15
-  authoritative application there; GitHub stays     
-  database                  canonical only for      
-                            code/issues/PRs         
-
-  Webhook ingestion is      Duplicate deliveries    PRD §13.2, §15, §28
-  idempotent on GitHub's    must never create       
-  delivery ID               duplicate contributions 
-                            or point rows           
-
-  Webhook payloads are      Guarantees no payload   PRD §21.1
-  stored durably before     loss if the             
-  async processing          broker/cache is         
-                            unavailable             
-
-  Contribution lifecycle is Prevents accidental     PRD §11
-  an explicit state machine crediting from          
-  with only `MERGED`        intermediate states     
-  credited                                          
-
-  Worker-crash recovery via Contributions are never PRD §11.2
-  heartbeat/lock-timeout    stuck or silently lost  
-  sweep                     because state lives in  
-                            Postgres                
-
-  Point award is            Prevents daily-limit    PRD §14.4
-  transactional and         bypass under concurrent 
-  race-safe, using          merges without a global 
-  per-participant-per-day   lock                    
-  row locking                                       
-
-  Exactly one award per     Prevents                PRD §15, §28
-  credited contribution,    double-awarding         
-  enforced at the database                          
-  level                                             
-
-  Over-limit merged         Rejecting a legitimate  PRD §14.3
-  contributions are         merged PR is bad UX;    
-  recorded with deferred    cap points, not         
-  points, never rejected    participation           
-
-  Deferred points are       Avoids retroactive      PRD §14.3, §29
-  **not** banked to the     leaderboard jumps;      
-  next day                  keeps the rule simple   
-                            --- *pending organizer  
-                            confirmation, AMB-3*    
-
-  Merge concurrency is      One bot hiccup must not PRD §12.2
-  bounded (5--10) and       become 300 concurrent   
-  admin-adjustable without  merge calls             
-  redeploy                                          
-
-  Separate Celery queues    Isolates failure        PRD §12.1
-  per workload with merge   domains; a merge outage 
-  highest priority          must not starve webhook 
-                            intake                  
-
-  Leaderboard is cached     Read performance under  PRD §8.6, §20
-  with short TTL;           deadline-time load      
-  participant's own rank                            
-  always visible                                    
-
-  Emergency pause/resume    Takes effect without    PRD §18
-  flags live on the config  restart; a human must   
-  singleton, checked per    confirm the fix before  
-  task/view, resumed        resuming                
-  explicitly                                        
-
-  Django Admin is the P0    Minimizes custom UI     PRD §18, §9
-  admin surface; a custom   work inside 10 days     
-  Ops panel is P1                                   
-
-  Reconciliation sync is    Webhook delivery gaps   PRD §13.4, §27
-  the safety net for missed must not lose           
-  webhooks                  contributions           
-
-  Full audit trail on point Disputes must be        PRD §19, §18
-  transactions and admin    resolvable              
-  actions                                           
-
-  Contribution rows are     Contribution history    PRD §11.2
-  never deleted; a bad      stays honest and        
-  merge is reversed via a   complete                
-  ledger entry                                      
-
-  Explicitly rejected       Adds deployment risk    PRD §5, §10.3
-  infrastructure:           and learning cost with  
-  Kubernetes,               no benefit at this      
-  microservices, GraphQL,   scale                   
-  Kafka                                             
-
-  Schedule slip absorbs     Merge-concurrency       PRD §26, plan §5
-  into the hardening/buffer control and idempotency 
-  period, never into        are correctness, not    
-  cutting correctness work  polish                  
-  -------------------------------------------------------------------------
-
-------------------------------------------------------------------------
-
-## 8. Non-Negotiable Constraints
-
-### Product constraints
-
--   10-day window to production launch (PRD §26).
--   P0 functionality is non-negotiable for launch. Cut P1, then P2, in
-    the order given in plan §5. Never silently downgrade or drop a P0
-    requirement.
--   Non-Goals (PRD §5) are the enforcement mechanism against scope
-    creep. Anything not listed P0/P1 defaults to out of scope. New asks
-    get a "post-launch" answer by default.
--   No custom Git hosting, in-browser editor, chat platform, social
-    feed, GitHub PR/review UI replacement, ML fraud detection, native
-    mobile app, or elaborate badge system.
--   Multi-tenancy is not built now, but the design should not preclude
-    it.
-
-### Data / integrity constraints
-
--   Every idempotency key in PRD §15 must exist and be enforced at the
-    database level, not only in application logic.
--   One award per credited contribution. Duplicate webhook deliveries
-    must never produce duplicate contributions or duplicate point rows.
--   Point award must be a single atomic transaction; no partial or
-    half-applied awards.
--   Daily-limit enforcement must be structurally race-safe (row-level
-    locking), not advisory.
--   Contribution rows are never deleted; corrections go through the
-    ledger, audited.
-
-### GitHub integration constraints
-
--   GitHub remains canonical for code, issues, PRs, reviews, and merges.
--   CommitRush never pushes on a participant's behalf; participant OAuth
-    requires no repository write scope.
--   Webhook signature verification is mandatory before any processing;
-    unsigned or mis-signed requests are rejected.
--   GitHub API calls back off when the remaining rate limit falls below
-    the safety threshold; non-critical sync deprioritizes itself.
--   A legitimate GitHub redelivery must never receive an error response.
-
-### Reliability constraints
-
--   The site must stay browsable from the database when GitHub, the
-    merge bot, or the cache is unavailable.
--   Broker unavailability must not lose webhook payloads; processing
-    resumes from durable records.
--   Stuck in-flight contributions must be recoverable by the heartbeat
-    sweep within the timeout window.
--   Queue isolation must hold: one failing queue must not starve the
-    others.
-
-### Security constraints
-
--   OAuth Authorization Code flow with `state` CSRF protection.
--   Secure, HttpOnly, SameSite session cookies; CSRF required on unsafe
-    methods.
--   CORS restricted to the deployed frontend origin only.
--   Secrets live in environment/secret manager --- never in the
-    repository, never in the database.
--   ORM only; no raw string-interpolated SQL. All filter/query params
-    validated through serializers.
--   GitHub-sourced text is rendered as text, not raw HTML, unless
-    explicitly sanitized.
--   Object-level authorization: a participant sees only their own full
-    contribution detail; admin actions require staff.
--   Rate limiting active on public list endpoints.
-
-### Operational constraints
-
--   Emergency pause/resume controls must take effect without a restart,
-    and each must be independently toggleable.
--   Resume is always an explicit human action.
--   All admin actions and point adjustments are audit-logged.
-
-### UX constraints
-
--   Server-side pagination everywhere; never load the full issue set
-    client-side.
--   Every list view has explicit loading, empty, and error-with-retry
-    states.
--   No optimistic updates for anything touching points or contribution
-    status --- optimistic UI is limited to trivial local state such as
-    filter selection.
--   Contribution status shown to the participant must map to the defined
-    status vocabulary with a plain-language explanation.
--   A service-status banner surfaces degraded-mode notices.
-
-------------------------------------------------------------------------
-
-## 9. Current Implementation Reality
-
-### Implemented
-
--   Nothing is confirmed implemented in the application (`backend/`,
-    `frontend/`).
--   Documentation artifacts confirmed to exist: `PRD.md`,
-    `.dev/plan.md`, `.dev/context.md`.
-
-### In Progress
-
--   `.dev/context.md` --- complete for the current
-    planning/initial-setup state.
--   No application work is confirmed to be in progress.
-
-### Planned (exists in `plan.md`, **not** built)
-
--   M1 --- Project setup, full data model, GitHub OAuth, config
-    singleton bootstrap, health endpoint
--   M2 --- GitHub read-side sync (repos, issues, labels,
-    rate-limit-aware)
--   M3 --- Project/Issue read APIs, throttling, Explorer UI
--   M4 --- Webhook ingestion, deduplication, async processing,
-    reconciliation scaffold
--   M5 --- Contribution state machine, validation rules, crash-recovery
-    sweep, status APIs and UI
--   M6 --- Merge queue with bounded concurrency, retry policy,
-    transactional point award with daily limits
--   M7 --- Leaderboard, dashboard, profile, stats, status banner
--   M8 --- Admin system and emergency controls
--   M9 --- Unit/integration/load/failure/security testing and hardening
--   M10 --- Deployment, observability, full production sync, smoke test,
-    buffer
-
-### Unknown / Requires Verification
-
--   Actual contents of `backend/` and `frontend/` --- directories are
-    reported to exist; whether they contain scaffolding, partial work,
-    or nothing is unverified.
--   Whether any dependency manifests, migrations, or configuration files
-    exist.
--   Whether the repository root directory name is `OxideAuth/` or
-    something else (AMB-9).
--   Whether any external accounts or infrastructure exist yet: GitHub
-    OAuth app, webhook secret, merge-bot credentials, hosting, managed
-    database/cache, error tracking, uptime monitoring.
--   Whether the tracked repository list (the \~67 repos) has been
-    assembled.
--   Whether any of the seven PRD open questions have been answered
-    outside these documents.
-
-**An agent must inspect the repository before claiming any item above
-has changed state.**
-
-------------------------------------------------------------------------
-
-## 10. Important Dependencies and Ordering
-
-The execution chain from `plan.md` (which preserves PRD §26):
-
-    M1  Auth / foundation / data model
-     → M2  GitHub read-side synchronization
-     → M3  Project & Issue APIs + Explorer UI
-     → M4  Webhook ingestion
-     → M5  Contribution state machine + validation
-     → M6  Merge queue + points
-     → M7  Leaderboard / dashboard / profile
-     → M8  Administration + emergency controls
-     → M9  Load, failure & security testing
-     → M10 Deployment + final reconciliation + buffer
-
-**Caveats that must be preserved, not smoothed over:**
-
--   **True critical path is M4 → M5 → M6** (webhook → validation → merge
-    → points). The PRD identifies this as the hardest span to compress.
-    If the schedule slips, it slips into M9/M10 buffer --- never into
-    cutting merge-concurrency control or idempotency.
--   **M4's formal dependency is M1 only** (per the PRD day-table), but
-    it has a **functional** dependency on M2: "references a tracked
-    issue" logic cannot be meaningfully tested without real issue data.
-    The plan records this distinction deliberately --- do not collapse
-    it in either direction.
--   **M8 depends on M5 and M6 existing**, since there must be pipeline
-    stages to pause and contributions to act on.
--   **M7 depends on M6** for point data and on M3 for established
-    frontend patterns.
--   **M9 requires M1--M8 complete.** M9 is a system-level hardening
-    pass; per-module unit tests are written during M1--M8, not deferred
-    to M9.
--   **Two open decisions sit on the critical path:** AMB-1 blocks the
-    start of M4; AMB-2 blocks the start of M6.
--   Backend-first applies within modules too: frontend tasks live inside
-    the module that owns their backing API and are not a parallel track.
-
-Task-level detail lives in `plan.md`. Do not duplicate it here.
-
-------------------------------------------------------------------------
-
-## 11. Known Ambiguities / Open Decisions
-
-AMB-1 through AMB-7 are the PRD's own open questions (§29) and **must
-not be answered by an agent**. AMB-8 through AMB-13 are additional gaps
-or inconsistencies surfaced between PRD sections or between the PRD and
-plan; they are recorded, not resolved.
-
-  --------------------------------------------------------------------------
-  ID                Issue                Current State     Required Action
-  ----------------- -------------------- ----------------- -----------------
-  AMB-1             Webhook registration Unresolved. PRD   Confirm
-                    model: single        §29 marks it      repository
-                    org-level webhook    "resolve          ownership
-                    vs. per-repo         immediately";     structure with
-                    registration across  plan marks it as  the event team
-                    scattered accounts   **blocking M4**   before starting
-                                                           M4
-
-  AMB-2             Merge bot interface  Unresolved. PRD   Obtain the
-                    is undefined ---     §29 states the    merge-bot
-                    GitHub Action, bot   backend team      contract before
-                    account with a       needs this        implementing
-                    token, or            contract by Day   merge processing.
-                    third-party service? 5; plan marks it  Do not assume an
-                                         as **blocking     interface
-                                         M6**              
-
-  AMB-3             Deferred points      PRD default is    Confirm with
-                    policy: lost at the  "not banked."     event organizers
-                    cap (PRD default)    Buildable now,    before treating
-                    vs. banked and       but unconfirmed   the behavior or
-                    released next day    with organizers   its UI copy as
-                                                           final
-
-  AMB-4             OAuth email scope:   Unresolved.       Decide before
-                    is participant email Affects the scope finalizing the
-                    needed, or are       requested in M1   OAuth scope
-                    username/avatar      and whether       request
-                    sufficient?          notifications do  
-                                         anything at       
-                                         launch            
-
-  AMB-5             Trivial/low-effort   Explicitly out of Confirm
-                    PR detection         scope for launch; organizers accept
-                                         reliance on       this. Do **not**
-                                         maintainer review implement diff
-                                         standards         scoring absent an
-                                                           explicit decision
-
-  AMB-6             Django Admin alone   PRD default:      Confirm Django
-                    vs. a custom Ops     Django Admin is   Admin UX is
-                    panel for            P0, custom panel  acceptable to
-                    live-incident        is P1             admins during an
-                    emergency controls                     incident
-
-  AMB-7             Post-event data      Not currently     If confirmed
-                    retention / final    scoped into any   needed, slot into
-                    frozen export for    module            the M9/M10
-                    prize distribution                     buffer. Do not
-                                                           add speculatively
-                                                           to earlier
-                                                           modules
-
-  AMB-8             **Emergency control  Requirement       Obtain an
-                    without a defined    exists; the       explicit decision
-                    config field:** PRD  backing           on the field and
-                    §18 lists "pause     configuration     semantics for
-                    point awarding" as a field is **not    pausing point
-                    P0 emergency         defined**         awarding. **Do
-                    control, but the                       not invent the
-                    EventConfig field                      field or infer
-                    list in §15 defines                    its behavior**
-                    only merge,                            
-                    validation, and                        
-                    submissions pauses                     
-                    plus leaderboard                       
-                    freeze. Plan M8-T5                     
-                    wires only the three                   
-                    defined pause flags                    
-
-  AMB-9             Fields referenced by Requirements      Resolve schema
-                    PRD prose but absent exist; schema     additions
-                    from the §15 entity  definitions are   explicitly during
-                    field lists: the     incomplete        M1 rather than
-                    merged-count value                     improvising them
-                    used for leaderboard                   mid-module.
-                    tie-breaking; the                      Record each
-                    issue-author                           resolution here
-                    identifier used by                     
-                    the                                    
-                    self-created-issue                     
-                    validation rule; the                   
-                    project slug used in                   
-                    the project detail                     
-                    route; the                             
-                    per-contribution                       
-                    priority flag used                     
-                    for merge-queue                        
-                    override; the                          
-                    retry-limit                            
-                    configuration the                      
-                    admin panel claims                     
-                    is editable; the                       
-                    worker heartbeat                       
-                    value referenced by                    
-                    the crash-recovery                     
-                    sweep                                  
-
-  AMB-10            Denormalized         Two mechanisms    Choose one
-                    participant point    described for the explicitly before
-                    total: §15 describes same value        implementing
-                    it as recomputed by                    point award;
-                    trigger/signal,                        transactional
-                    while §15's                            consistency is a
-                    leaderboard note and                   stated P0
-                    §14.4 describe it as                   correctness
-                    updated inside the                     property
-                    same transaction as                    
-                    the ledger insert                      
-
-  AMB-11            A lightweight status Endpoint          Decide whether
-                    endpoint is          existence         the banner is fed
-                    referenced as a      undecided         by the stats
-                    possible feed for                      endpoint or a
-                    the service-status                     dedicated one
-                    banner but does not                    before building
-                    appear in the API                      M7
-                    specification                          
-
-  AMB-12            Root                 Naming            Verify actual
-                    working-directory    discrepancy,      repository layout
-                    name given as        unexplained       before assuming
-                    `OxideAuth/` while                     paths
-                    the project and                        
-                    repository are named                   
-                    HackIT CommitRush                      
-
-  AMB-13            Agent-mapping        Naming            Confirm one
-                    document is referred discrepancy       spelling before
-                    to as both                             creating the
-                    `ASWmap.md` (in                        file, to avoid
-                    plan.md) and                           two competing
-                    `awsmap.md` (in the                    documents
-                    current brief)                         
-  --------------------------------------------------------------------------
-
-------------------------------------------------------------------------
-
-## 12. Agent Safety Rules
-
-1.  **Read `PRD.md` before making any product-level decision.** It is
-    authoritative.
-2.  **Read `.dev/plan.md` before selecting work.** Work is selected by
-    module and task ID, not improvised.
-3.  **Read this file before modifying anything**, and re-read it if
-    returning after a gap.
-4.  **Never assume planned functionality is implemented.** Inspect the
-    repository and verify.
-5.  **Never silently resolve a contradiction.** Record it in §11, state
-    which source has authority, and escalate.
-6.  **Never answer an open question on the project's behalf** (AMB-1
-    through AMB-13). If a task is blocked by one, stop and report the
-    block.
-7.  **Do not invent schema fields, endpoints, config flags, or
-    workflows** that the PRD does not establish --- particularly around
-    EventConfig and emergency controls (AMB-8, AMB-9).
-8.  **Do not redesign the architecture.** Explicitly rejected
-    technologies stay rejected. Do not add a technology because it is
-    common for this kind of system.
-9.  **Do not change public API contracts casually.** The frontend
-    depends on stable contracts; backend-first sequencing exists for
-    this reason.
-10. **Preserve idempotency and data-integrity guarantees in every
-    change.** Deduplication keys, single-award enforcement,
-    transactional point award, and row-level locking are correctness,
-    not optimization.
-11. **Never introduce a synchronous GitHub or merge-bot call into a
-    user-facing request path.**
-12. **Do not bypass security constraints** --- signature verification,
-    object-level authorization, secret handling, input validation.
-13. **Do not silently downgrade, defer, or drop a P0 requirement.** Cut
-    P1/P2 in the documented order instead, and record the cut.
-14. **Keep changes scoped to the assigned task.** No opportunistic
-    refactors outside the task boundary.
-15. **Do not modify `.dev/` orchestration files unless explicitly
-    instructed**, other than the context updates described in §13.
-16. **Never expose `.dev/` contents through application functionality**,
-    and never commit them --- the directory is gitignored by design.
-17. **Respect module checkpoints.** A module is complete only when its
-    checkpoint criteria are observably met --- not when its tasks look
-    finished.
-18. **Report honestly.** If a task was partially completed or a
-    checkpoint was not met, say so rather than marking it done.
-
-------------------------------------------------------------------------
-
-## 13. Context Update Rules
-
-Update this document when:
-
--   a module or major task reaches its checkpoint (update §3 and §9),
--   an open question or ambiguity in §11 is resolved (move it to §7 with
-    its source, and remove it from §11),
--   a significant architectural or product decision is made (§7),
--   a constraint changes (§8),
--   implementation reality diverges from what §9 records,
--   a new conflict between PRD and plan is discovered (§11),
--   a future document (`awsmap.md`, `continue.md`) is created (§4).
-
-**This document represents the CURRENT STATE.** It is not an append-only
-diary and not a changelog. When something becomes true, replace what was
-there --- do not stack historical entries. Keep it concise enough that
-an agent will actually read it end to end.
-
-Routine per-task progress belongs in the execution workflow, not in
-every section of this file.
-
-------------------------------------------------------------------------
-
-## 14. Quick Start for a New Agent
-
-1.  Read `PRD.md` --- it is authoritative for product requirements and
-    acceptance criteria.
-2.  Read `.dev/plan.md` --- modules M1--M10, task IDs, dependencies,
-    checkpoints.
-3.  Read `.dev/context.md` (this file) --- current state, established
-    decisions, constraints, open questions.
-4.  **Inspect the repository.** Do not assume implementation state from
-    any document.
-5.  Identify the assigned task by its module and task ID.
-6.  Check that the task's dependencies are actually satisfied, not
-    merely scheduled.
-7.  Check §11 --- confirm no open decision blocks the task. If one does,
-    stop and report.
-8.  Implement only the assigned scope, respecting §8 constraints and §12
-    safety rules.
-9.  Validate against the task's expected outcome and the module's
-    checkpoint criteria.
-10. Update §3, §9, and §11 of this document when state genuinely
-    changes.
+On starting any session, in order:
+
+1. Read `PRD.md`.
+2. Read `.dev/plan.md`.
+3. Read `.dev/context.md` — pay particular attention to §3 (current state), §9 (implementation reality), and §11 (open ambiguities).
+4. Read `.dev/awsmap.md` — identify your agent ID and its ownership boundary, forbidden modifications, and review requirements.
+5. Proceed to the Repository Reality Check (§4). Do not select a task before completing it.
+
+**Never assume, at startup:**
+- That any module or task described as "planned" in `context.md` is implemented.
+- That the repository matches the state described in your last session.
+- That no other agent has touched the repository since you last worked.
+- That an ambiguity listed as open in `context.md` §11 has been resolved, unless `context.md` itself now says so.
+- That you are the only agent with a task currently in progress.
+
+---
+
+## 4. Repository Reality Check
+
+Before selecting a task, establish ground truth. Documents describe intent and history; the repository is the only source of *current fact*.
+
+1. **Inspect the actual directory structure and file contents** relevant to your candidate task's ownership area (per `awsmap.md` §5). Do not infer contents from what a Django/React project "usually" has.
+2. **Inspect git status and recent history** — uncommitted changes, unmerged work, or commits since `context.md` was last updated all indicate work `context.md` may not yet reflect.
+3. **Cross-check `context.md` §9 (Implemented / In Progress / Planned / Unknown)** against what you actually observe. If they disagree, `context.md` is stale — do not silently trust it, and do not silently trust your own read either. Record the discrepancy (see §15) before proceeding.
+4. **Detect work already performed by another agent.** Look for commits, branches, or handoff reports (§14) not yet reflected in `context.md`. If found, treat that work as authoritative for its stated scope and do not redo or overwrite it.
+5. If the repository state cannot be determined with confidence (e.g., ambiguous partial implementation, conflicting evidence), **stop** — this is a Stop Condition (§21), not a judgment call to resolve by guessing.
+
+**Rule: "scheduled" ≠ "completed."** A task's presence and ordering in `plan.md` is a schedule, not a status report. A task is only "done" per the Definition of Done in §22, evidenced by a handoff report (§14) and, where applicable, by what you directly observe in the repository.
+
+---
+
+## 5. Task Selection Algorithm
+
+A task from `plan.md` (M1-T1 through M10-T8 — no other task IDs exist and none are invented here) is **eligible for a given agent** only when ALL of the following hold:
+
+1. **Dependency satisfaction is real, not scheduled.** Every task/module `plan.md` lists as a dependency is verified complete per §4 and §22 — not merely earlier in the sequence.
+2. **No open ambiguity blocks it.** Cross-check the task against `context.md` §11 and `awsmap.md` §12. If an AMB ID affects this task and remains unresolved, the task is **not eligible** (see §7).
+3. **The requesting agent is the task's primary owner** per `awsmap.md` §6. An agent does not pick up a task assigned to another agent merely because it is idle or the task looks easy.
+4. **Required upstream contracts are published**, per `awsmap.md` §8 — not merely implied by another agent's code. If a contract this task depends on has not been handed off in writing, the task is not eligible.
+5. **No conflicting work is currently in progress** — check for uncommitted changes or open work from another agent in the same ownership area (`awsmap.md` §10). If found, coordinate or wait; do not proceed concurrently.
+6. **No higher-priority blocking work is being skipped.** In particular: the M4 → M5 → M6 critical path (§19) may never be bypassed by jumping to a later dependent task "because it's available." Respect the actual task dependencies in `plan.md`; do not treat every off-critical-path task in M4 as a prerequisite for all M5 work.
+
+Task order itself is never re-derived here — `plan.md` is the sole source of sequence and dependency. If this document and `plan.md` ever appear to disagree on order, `plan.md` wins and the discrepancy is escalated (§17).
+
+If no task is eligible for your agent role, **stop** and report that — do not select an ineligible task to appear productive, and do not perform unassigned "helpful" work (`awsmap.md` §17).
+
+---
+
+## 6. Dependency Verification
+
+For every dependency `plan.md` lists for the candidate task:
+
+- If the dependency is a **prior task**, confirm via §4 that its implementation is actually present and via §22 that it met its Definition of Done — not merely that a handoff report exists claiming so, if the report itself is inconsistent with what you observe.
+- If the dependency is a **contract** (schema, API, event, pipeline — per `awsmap.md` §8), confirm the contract was actually published in a handoff, and read it. Do not proceed on an assumed or inferred contract.
+- If the dependency is a **module checkpoint** (e.g., M9 requires M1–M8 complete), confirm the checkpoint was verified per `awsmap.md` §16 — module completion is a checkpoint verdict, not a tally of finished-looking tasks (§16 below).
+
+If a dependency cannot be verified as actually satisfied, the task is not eligible. Do not proceed "provisionally."
+
+---
+
+## 7. Open Question / AMB Handling
+
+`context.md` §11 lists AMB-1 through AMB-13. **AMB-13 is resolved** (the agent-map filename is `.dev/awsmap.md`). **AMB-1 through AMB-12 remain open** unless `context.md` itself states otherwise at the time you read it — this document does not change any of their status.
+
+**No agent may resolve an AMB.** Not by "reasonable assumption," not by picking the option that seems more likely, not by implementing a placeholder "until it's decided."
+
+If a task is blocked by an open AMB:
+
+1. **Identify the exact AMB ID** from `context.md` §11.
+2. **Identify the exact task ID** it blocks.
+3. **State precisely what is blocked and why** — which specific decision the task cannot proceed without.
+4. **Escalate through the mechanism `awsmap.md` §12 defines** — route through A1 to the project owner.
+5. **Stop that task.** Do not implement a guessed workaround, a stubbed default, or a "temporary" version of the blocked behavior.
+6. **Resume only after the decision is officially recorded in `context.md`** (moved from §11 to §7 there, per its own update rules) — not merely mentioned in conversation.
+
+Known critical-path blockers to watch for specifically: **AMB-1 blocks M4**; **AMB-2 blocks M6**. Do not start either module while its blocking AMB is open.
+
+---
+
+## 8. Agent Ownership Enforcement
+
+Ownership is defined in `awsmap.md` §4–§6 and is binding.
+
+- An agent executes only tasks for which `awsmap.md` §6 names it the **primary owner**.
+- An agent does not take another agent's task because it is convenient, faster, or already understood — even under schedule pressure.
+- Required reviewers (`awsmap.md` §9) and required contract producers/consumers (§8) must be respected exactly as listed; an agent does not skip a review because it is confident the work is correct.
+- Forbidden modifications (`awsmap.md` §4, per-agent "Must NOT modify" rows) are absolute. An agent noticing an issue outside its ownership **reports it** — it does not fix it.
+- **A1 remains a coordination and verification role.** A1 verifies dependencies, contracts, and checkpoints, and arbitrates conflicts — A1 does not become a general implementation agent by default. A1 implements directly only where `awsmap.md` explicitly assigns it a task ID (e.g., M9-T6 or M10-T8) or where a specific integration fix has explicit project-owner authorization.
+- Shared-file conflicts follow `awsmap.md` §10's coordination protocol exactly — request, confirm, implement by the owner, record, notify. No concurrent edits to a shared file.
+
+---
+
+## 9. Contract-First / Backend-First Rules
+
+- Backend-first sequencing is structural, not a suggestion: a frontend task (owned by A6) does not start until its backing API contract (owned by A2, per `awsmap.md` §8 C5) is published and stable.
+- **A6 must never invent, stub, or assume a backend endpoint, field, or response shape.** If a needed contract is missing, A6 files a gap report (per `awsmap.md` §8 C5) and stops — it does not build against a guess.
+- **A2 must never break a published contract** once a consumer has begun using it, without the coordinated change process in `awsmap.md` §8 C6 (A1 approval, consumer notification).
+- The same contract-first rule applies upstream: A3's schema contract gates A2/A4/A5; A4's event contract gates A5; A5's pipeline contract gates A2/A3/A6/A7. No agent proceeds against an unpublished upstream contract.
+- Agents do not bypass a real dependency to "parallelize" work. `awsmap.md` §7 (Parallel Execution Matrix) governs exactly what may run concurrently; it is not open to reinterpretation for convenience.
+
+---
+
+## 10. Implementation Rules
+
+While executing an eligible task:
+
+- **Modify only the assigned scope** — the files and subsystem `awsmap.md` §5/§6 assign to this task and this agent.
+- **Preserve existing architecture.** Do not redesign, restructure, or introduce a different pattern than what the PRD and plan establish.
+- **Do not introduce rejected technologies** — Kubernetes, microservices, GraphQL, Kafka, or any other technology PRD §5/§10.3 explicitly rejects, and do not introduce any technology "because it's common for this kind of system" (`awsmap.md` §17).
+- **No opportunistic refactors.** A task fixes or builds what it was assigned; it does not also clean up, rename, or restructure adjacent code.
+- **Do not modify unrelated modules or tasks**, even ones that look related.
+- **Do not modify `.dev/` orchestration files** during implementation, except the specific `context.md` updates this document authorizes in §15. `.dev/` stays gitignored and is never exposed through application functionality.
+- **Do not silently change another agent's established decision.** If you believe a prior decision is wrong, report it — do not overwrite it unilaterally.
+
+---
+
+## 11. P0 Correctness Guardrails
+
+These are the project's non-negotiable correctness properties (PRD, as reflected in `context.md` §7–§8). **No schedule pressure, task difficulty, or convenience justifies weakening any of these:**
+
+- No user-facing request path may synchronously call GitHub.
+- No user-facing request path may synchronously call the merge bot.
+- Every webhook request must pass signature verification before any processing.
+- Webhook payloads must be durably stored before or as part of acknowledgment — never lost if downstream processing fails.
+- Webhook processing must be idempotent on GitHub's delivery ID — duplicate deliveries never duplicate effects.
+- The contribution state machine's defined transitions must be followed exactly — no shortcut transitions, no skipped states.
+- Worker-crash recovery (the heartbeat/lock-timeout sweep) must remain functional — no contribution may become permanently stuck.
+- Daily-limit enforcement must remain race-safe under concurrent merges (per-participant-per-day row-level locking) — never a global lock, never an unlocked check-then-act.
+- Point award must remain a single atomic transaction — never partially applied.
+- Exactly one credited award per contribution must hold, enforced at the database level.
+- Merge concurrency must remain bounded to the configured limit at all times, including under burst load.
+- Graceful degradation must hold for every dependency the PRD names (GitHub, merge bot, Redis, Postgres, Celery workers) — the read-facing site stays usable even when any one of them fails.
+- Emergency pause/resume/freeze controls must remain effective without a restart, and each must remain independently toggleable.
+- Required audit logging (admin actions, point adjustments) must remain in place wherever the PRD requires it.
+
+If completing a task as scoped would require weakening any of the above, **stop** — this is a Stop Condition (§21), not a trade-off to make locally.
+
+---
+
+## 12. Validation & Testing Gate
+
+**Writing code is not completion.** Before a task may be reported as anything other than PARTIAL or BLOCKED:
+
+- Relevant tests (unit/integration, per the task's nature) must exist and must pass — reported with actual results, not "tests pass."
+- Where the task touches a migration, the migration must be verified to apply cleanly against the current schema state.
+- Where the task touches an API or other contract, the contract must be verified against what was actually published — not assumed compatible.
+- Where the task touches auth, authorization, signature verification, or any security-relevant path, security verification appropriate to that surface must be performed or explicitly deferred to the owning reviewer (A7, per `awsmap.md` §9).
+- Manual verification is required wherever automated coverage cannot reasonably confirm the task's observable outcome (e.g., confirming an emergency-control flag takes effect without a restart).
+- Evidence — actual output, not a claim — must be captured for the handoff report (§14).
+
+A task with failing, missing, or unverifiable validation is **not complete**, regardless of how much implementation exists.
+
+---
+
+## 13. Review Gate
+
+Review requirements come from `awsmap.md` §9 and are mandatory, not advisory.
+
+- Determine the task's required reviewer(s) from `awsmap.md` §9's category table before starting — know the review bar in advance, not as an afterthought.
+- **Self-declared completion does not satisfy a review requirement.** A task requiring A3, A5, or A7 review is not complete until that agent has actually reviewed it and recorded a verdict.
+- The highest-risk work in the project (M6-T5 point award: A7 + A5 + A1; M5/M6 state and concurrency correctness; the webhook path) carries the review load `awsmap.md` §9 specifies — do not shortcut it because the implementer is confident.
+- A7 (or any required reviewer) may reject the work. A rejection is binding: the task is not complete regardless of implementation effort. The owning agent addresses the rejection and resubmits; the reviewer does not take over implementation.
+
+---
+
+## 14. Handoff Procedure
+
+Use the handoff format `awsmap.md` §14 defines exactly — no alternate or abbreviated format:
+
+```
+HANDOFF
+Agent:              A#
+Task:               M#-T#
+Status:             COMPLETE | BLOCKED | PARTIAL
+
+What changed:       <concise description of the actual change>
+Files changed:      <paths, as verified in the repository>
+
+Tests run:          <what was executed>
+Test results:       <pass/fail with specifics — not "tests pass">
+
+Contract changes:   API / schema / pipeline contract published or modified.
+                    NONE if nothing downstream is affected.
+Consumers notified: <agent IDs, or NONE>
+
+Reviews obtained:   <reviewer agent IDs + verdicts, per awsmap.md §9>
+
+Known limitations:  <what this does not do>
+Unresolved issues:  <including any AMB blockers encountered>
+Follow-up tasks:    <existing plan.md task IDs only — never invent a task ID>
+
+Checkpoint status:  Does this satisfy the task's validation criteria in plan.md?
+                    YES / NO / NOT APPLICABLE (task is not a module checkpoint)
+                    If NO: what remains.
+```
+
+Produce this report for every task regardless of outcome — a BLOCKED or PARTIAL result is reported with the same rigor as COMPLETE. A handoff claiming COMPLETE without recorded reviews and test results is invalid and must not be accepted or built upon by another agent.
+
+---
+
+## 15. Context Update Procedure
+
+`context.md` represents **current state**, not a running log. Update it — following its own §13 rules — only when one of these becomes true:
+
+- Implementation reality actually changed (an item moves between Implemented / In Progress / Planned / Unknown in its §9).
+- A task or module checkpoint was verified per §16 below.
+- An AMB in its §11 was **officially** resolved (moved to §7 with its decision and source — never resolved by an agent's inference).
+- A significant architectural or product decision was made and needs recording in its §7.
+- A constraint changed (its §8).
+- A conflict between documents, or between documents and observed repository state, was discovered (recorded in its §11 as a new entry, not silently absorbed).
+
+**Do not turn `context.md` into a diary.** Routine per-command progress, intermediate attempts, and task-in-progress narration belong in the task's own working notes or the handoff report — not in `context.md`. When updating, replace what is stale; do not stack a new paragraph on top of an old one describing the same fact.
+
+---
+
+## 16. Module Checkpoint Gate
+
+A module (M1–M10) is **not** complete because its listed tasks each report COMPLETE. It is complete only when its checkpoint criteria, as defined in `plan.md`, are independently verified true — per the checkpoint-verifier assignment in `awsmap.md` §16.
+
+Procedure:
+1. Confirm every task belonging to the module has a COMPLETE handoff with required reviews obtained.
+2. The module's designated checkpoint verifier (per `awsmap.md` §16 — often A7, always with A1) evaluates the module against `plan.md`'s stated checkpoint criteria directly, not against the task list.
+3. If the checkpoint criteria are met: record the module as complete in `context.md` per §15 above.
+4. If the checkpoint criteria are **not** met, even though tasks look finished: the module remains incomplete. Identify exactly which checkpoint criterion fails, route the fix to the owning agent per `awsmap.md` §6, and revalidate from step 1 for the affected criterion.
+
+Do not advance to a dependent module until the checkpoint gate has actually passed.
+
+---
+
+## 17. Failure / Blocked Task Procedure
+
+None of the following are ever hidden, silently retried into a different approach without recording it, or worked around without escalation:
+
+| Situation | Required action |
+|---|---|
+| Tests fail | Report failure with evidence in the handoff; task is PARTIAL/BLOCKED, not COMPLETE. Fix within scope or escalate if the fix requires a decision. |
+| A claimed dependency turns out unsatisfied on inspection | Stop the task. Correct `context.md` if it misrepresented the state (§15). Re-run Task Selection (§5). |
+| A required contract is missing or unpublished | Stop. Request it from the owning agent per `awsmap.md` §8. Do not proceed on an assumed contract. |
+| Merge conflict in a shared file | Do not force-resolve unilaterally. Follow `awsmap.md` §10's coordination protocol; involve the file's primary owner. |
+| Another agent has modified files this task needs | Do not overwrite. Determine via git history/handoffs whether that work is reviewed/complete; coordinate rather than clobber. |
+| Required infrastructure/environment is unavailable | Report as BLOCKED with the specific unavailable dependency; do not simulate or fake the missing piece silently. |
+| An open AMB blocks the task | Follow §7 exactly. Stop and escalate. |
+| Repository state is unexpected or inconsistent with documents | Stop (§4). Record the discrepancy. Do not proceed on a best guess of what "must have happened." |
+| A genuine architecture conflict is discovered (e.g., PRD and an existing implementation disagree) | Do not silently pick a side. Escalate per `awsmap.md` §12/this document §21. |
+
+In every case: report the real state, including uncertainty. A vague or optimistic status is worse than an explicit BLOCKED.
+
+---
+
+## 18. Multi-Agent Concurrency Rules
+
+- Before editing, inspect current git state (§4) — do not assume the repository matches what you last touched or what a handoff report described, without confirming.
+- Never overwrite another agent's unreviewed work. If work exists that you did not expect, treat it as real and investigate before acting.
+- Do not edit a file another agent currently owns or is actively working in without the coordination protocol (`awsmap.md` §10).
+- Communicate exclusively through handoff reports (§14) and the escalation path (§7/§21) — not through undocumented assumptions about what another agent "probably did."
+- Escalate ownership conflicts (two agents believing they own the same task or file) to A1 rather than resolving by whoever acts first.
+- **Never reset, revert, or discard another agent's changes without explicit project-owner authorization**, even if you believe your version is better.
+- Respect the Parallel Execution Matrix in `awsmap.md` §7 exactly — it defines both where concurrency is safe and where it is forbidden (most notably M4/M5/M6, see §19 below).
+
+---
+
+## 19. Scope-Cutting / Schedule Pressure
+
+The PRD's priority model (P0/P1/P2) remains authoritative regardless of how the 10-day schedule is tracking. If time pressure appears:
+
+1. **Cut P2 items first**, in the order `plan.md` §5 lists them.
+2. **Then cut P1 items**, in that same documented order.
+3. **Never silently cut, defer, or downgrade a P0 requirement.** If a P0 item appears at risk, that is an escalation (§21), not a scope decision an agent makes alone.
+4. **Record every deliberate scope cut** — what was cut, why, and by what authority — in `context.md` per §15, not left implicit.
+
+**The M4 → M5 → M6 critical path (webhook ingestion → contribution state machine/validation → merge queue/points) is explicitly protected.** The real dependency chain must never be bypassed, reordered, or parallelized away. This does **not** mean every M4 task must finish before every M5 task: off-critical-path work such as M4-T5 reconciliation may run in parallel when its own dependencies are satisfied, exactly as permitted by `awsmap.md` §7. If the schedule is genuinely at risk, the absorption point is the hardening/buffer capacity in M9/M10 — not this path's P0 correctness work.
+
+---
+
+## 20. M10 / Production Execution
+
+M10 uses exactly the current canonical structure from `plan.md`: **M10-T1 through M10-T8**, with the dependencies `plan.md` defines for each — no other numbering, and no task invented beyond these eight.
+
+Execution follows the exact dependencies in `plan.md`: **M10-T3 (managed stores) depends on M9; M10-T4 (secrets) depends on M9 + M10-T3; M10-T1 (backend deploy) depends on M9 + M10-T3 + M10-T4; M10-T2 (frontend deploy) depends only on M9 and may proceed independently of T1; M10-T5 depends on T1 + T2; M10-T6 depends on T1 + T3; M10-T7 depends on T1–T6; M10-T8 depends on T7.** Do not invent an additional dependency between T1 and T2. Ownership and review of each M10 task are resolved from `awsmap.md` at execution time rather than duplicated here.
+
+Do not introduce deployment infrastructure, tooling, or a process topology beyond what PRD §25 and `plan.md`'s M10 tasks establish. M10 does not begin until M9's checkpoint (per `awsmap.md` §16) has actually passed — not merely until M9's tasks look finished.
+
+---
+
+## 21. Stop Conditions
+
+An agent **must stop** — not pause-and-guess, not proceed cautiously, stop — when any of the following occurs:
+
+- An open AMB (context.md §11) blocks the current task.
+- A required decision has not been made and is not an agent's to make.
+- An ownership conflict exists (two agents, one task; or a task with no clear owner in `awsmap.md`).
+- A claimed dependency is not actually satisfied on inspection.
+- A required reviewer is unavailable and the task's risk category (`awsmap.md` §9) does not permit proceeding without that review.
+- A genuine security concern is identified, whether or not it was the task's original focus.
+- A genuine data-integrity concern is identified (idempotency, race-safety, transactional guarantees).
+- An architecture conflict is discovered between documents, or between a document and observed repository state.
+- The task as scoped cannot be completed without exceeding its assigned boundary (per `awsmap.md` ownership) or without violating a P0 guardrail (§11).
+- A module checkpoint fails verification and the failure requires a decision beyond a straightforward fix within the owning agent's scope.
+
+Stopping means: record the exact reason (which condition, which task, which document/section it references), produce a handoff reporting BLOCKED with full detail, and escalate per §7/§17. Stopping is not a failure state to avoid — proceeding past a real stop condition is the actual failure.
+
+---
+
+## 22. Definition of Done
+
+A task is **COMPLETE** only when every one of these holds simultaneously:
+
+1. The implementation satisfies the task's defined objective and expected outcome exactly as `plan.md` states them — no more, no less.
+2. Every dependency the task relied on remains intact and unbroken by this change.
+3. Required tests/validation (§12) pass, with evidence, not merely "should work."
+4. Required review (§13) has been obtained from the correct reviewer(s) per `awsmap.md` §9, with a recorded verdict.
+5. No blocking issue remains open against this task — including no unresolved AMB, no missing contract, no unreviewed conflict.
+6. A handoff report (§14) has been produced, honestly reflecting status, limitations, and any unresolved issues.
+7. Where the task constitutes or contributes to a module checkpoint, `context.md` and, where applicable, the checkpoint record (§16) have been updated to reflect the true, verified state.
+
+If any one of these does not hold, the task is **PARTIAL** or **BLOCKED**, and is reported as such. A task is never marked COMPLETE to reflect effort rather than verified outcome.
+
+---
+
+## 23. Quick Reference / Agent Checklist
+
+1. Read PRD.md → plan.md → context.md → awsmap.md, in full, this session.
+2. Inspect the actual repository and git state. Trust what you observe over what any document assumed.
+3. Identify your agent ID and confirm you are the primary owner of your candidate task per awsmap.md §6.
+4. Verify every dependency is *actually* satisfied — not just earlier in the schedule.
+5. Check context.md §11 and awsmap.md §12 for any AMB blocking this task. If blocked: stop, escalate, do not proceed.
+6. Confirm every contract you depend on has been published (awsmap.md §8). Do not infer one.
+7. Check for conflicting concurrent work in your ownership area before editing anything.
+8. Implement strictly within your assigned scope. No refactors, no rejected technologies, no architecture changes, no `.dev/` edits.
+9. Protect every P0 guardrail in §11 — never trade one away for schedule convenience.
+10. Run and record real validation (§12). "Written" is not "done."
+11. Obtain every required review (§13) before calling the task complete.
+12. Produce the full handoff report (§14) — honestly, including BLOCKED/PARTIAL outcomes.
+13. Update `context.md` only per §15 — current state, not a diary.
+14. If this task completes a module, verify the checkpoint per §16 before treating the module as done.
+15. If schedule pressure appears, cut P2 then P1 only, per §19 — never P0, and protect M4 → M5 → M6 absolutely.
+16. If any Stop Condition (§21) applies, stop. Report. Escalate. Do not guess your way past it.
+17. Only after all of the above: return to Task Selection (§5) for the next eligible task.
