@@ -843,6 +843,24 @@ plan; they are recorded, not resolved.
                     plan.md) and                           two competing
                     `awsmap.md` (in the                    documents
                     current brief)                         
+
+  AMB-14            M1-T5 Redis health   Known deferred    /health/ currently
+                    check deferred       item              verifies PostgreSQL/
+                                                           database connectivity
+                                                           only. Redis is not
+                                                           introduced until M4/M5,
+                                                           so Redis connectivity is
+                                                           intentionally not
+                                                           checked during M1. When
+                                                           Redis is introduced, the
+                                                           health endpoint must be
+                                                           extended to report
+                                                           Redis connectivity as
+                                                           required by PRD §23.
+                                                           This must not be
+                                                           forgotten or treated
+                                                           as the final health-
+                                                           response shape.
   --------------------------------------------------------------------------
 
 ------------------------------------------------------------------------
