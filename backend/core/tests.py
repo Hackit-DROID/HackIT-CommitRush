@@ -655,3 +655,47 @@ class GitHubOAuthTestCase(TestCase):
 
         resp_me_again = self.client.get('/api/v1/auth/me/')
         self.assertEqual(resp_me_again.status_code, 401)
+
+
+class HealthCheckTestCase(TestCase):
+    def test_health_endpoint_healthy(self):
+        response = self.client.get('/health/')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data.get('status'), 'healthy')
+        self.assertEqual(data.get('database'), 'connected')
+
+    def test_versioned_health_endpoint_healthy(self):
+        response = self.client.get('/api/v1/health/')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data.get('status'), 'healthy')
+        self.assertEqual(data.get('database'), 'connected')
+
+    def test_health_endpoint_head_method_supported(self):
+        response = self.client.head('/health/')
+        self.assertEqual(response.status_code, 200)
+
+    def test_health_endpoint_unsupported_methods(self):
+        for method in ['post', 'put', 'patch', 'delete']:
+            client_method = getattr(self.client, method)
+            response = client_method('/health/')
+            self.assertEqual(response.status_code, 405)
+
+    @patch('core.health_views.check_database')
+    def test_health_endpoint_db_failure_returns_503(self, mock_check_db):
+        mock_check_db.return_value = False
+        response = self.client.get('/health/')
+        self.assertEqual(response.status_code, 503)
+        data = response.json()
+        self.assertEqual(data.get('status'), 'unhealthy')
+        self.assertEqual(data.get('database'), 'unavailable')
+
+    @patch('django.db.connection.cursor')
+    def test_health_check_database_probe_handles_db_exception(self, mock_cursor):
+        mock_cursor.side_effect = Exception("Database connection timeout")
+        response = self.client.get('/health/')
+        self.assertEqual(response.status_code, 503)
+        data = response.json()
+        self.assertEqual(data.get('status'), 'unhealthy')
+        self.assertEqual(data.get('database'), 'unavailable')
