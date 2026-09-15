@@ -1,5 +1,7 @@
 from django.conf import settings
-from django.db import models
+from django.db import IntegrityError, models
+from django.db.models.signals import pre_delete
+from django.dispatch import receiver
 
 
 class Participant(models.Model):
@@ -449,6 +451,48 @@ class EventConfig(models.Model):
 
     def __str__(self):
         return f"EventConfig (Status: {self.event_status})"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        if self.__class__.objects.filter(pk=1).exists():
+            self._state.adding = False
+            kwargs.pop('force_insert', None)
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise IntegrityError("The EventConfig singleton instance cannot be deleted.")
+
+    @classmethod
+    def get_solo(cls):
+        """
+        Retrieve or initialize the singleton configuration row with primary key 1.
+        """
+        obj, _ = cls.objects.get_or_create(
+            pk=1,
+            defaults={
+                'merge_concurrency': 5,
+                'max_contributions_per_day': 5,
+                'max_points_per_day': 500,
+                'merge_paused': False,
+                'validation_paused': False,
+                'submissions_paused': False,
+                'leaderboard_frozen': False,
+                'event_status': 'pending',
+            },
+        )
+        return obj
+
+    @classmethod
+    def load(cls):
+        """
+        Alias for get_solo().
+        """
+        return cls.get_solo()
+
+
+@receiver(pre_delete, sender=EventConfig)
+def prevent_event_config_deletion(sender, instance, **kwargs):
+    raise IntegrityError("The EventConfig singleton instance cannot be deleted.")
 
 
 class WebhookEvent(models.Model):
