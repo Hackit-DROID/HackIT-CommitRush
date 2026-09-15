@@ -1,13 +1,16 @@
 import datetime
+from io import StringIO
 import urllib.parse
 from unittest.mock import MagicMock, patch
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.db import IntegrityError, transaction
 from django.middleware.csrf import _get_new_csrf_string, _mask_cipher_secret
 from django.test import Client, TestCase, override_settings
 
+from core.bootstrap import bootstrap_event_config
 from core.models import (
     Participant,
     Project,
@@ -217,6 +220,87 @@ class SchemaIntegrityTestCase(TestCase):
             details={'reason': 'Manual approval'},
         )
         self.assertIsNotNone(audit.id)
+
+
+class EventConfigSingletonTestCase(TestCase):
+    def test_canonical_defaults_on_bootstrap(self):
+        config = EventConfig.get_solo()
+        self.assertEqual(config.pk, 1)
+        self.assertEqual(config.merge_concurrency, 5)
+        self.assertEqual(config.max_contributions_per_day, 5)
+        self.assertEqual(config.max_points_per_day, 500)
+        self.assertFalse(config.merge_paused)
+        self.assertFalse(config.validation_paused)
+        self.assertFalse(config.submissions_paused)
+        self.assertFalse(config.leaderboard_frozen)
+        self.assertEqual(config.event_status, 'pending')
+
+    def test_singleton_save_enforces_pk_1(self):
+        config = EventConfig(
+            merge_concurrency=10,
+            max_contributions_per_day=8,
+            max_points_per_day=800,
+            event_status='active',
+        )
+        config.save()
+        self.assertEqual(config.pk, 1)
+        self.assertEqual(EventConfig.objects.count(), 1)
+
+        # Another instance saved still targets pk=1 and overwrites/updates
+        config2 = EventConfig(
+            merge_concurrency=3,
+            event_status='paused',
+        )
+        config2.save()
+        self.assertEqual(config2.pk, 1)
+        self.assertEqual(EventConfig.objects.count(), 1)
+        self.assertEqual(EventConfig.objects.get(pk=1).merge_concurrency, 3)
+        self.assertEqual(EventConfig.objects.get(pk=1).event_status, 'paused')
+
+    def test_singleton_delete_prevented(self):
+        config = EventConfig.get_solo()
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                config.delete()
+        self.assertEqual(EventConfig.objects.count(), 1)
+
+    def test_queryset_delete_prevented(self):
+        EventConfig.get_solo()
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                EventConfig.objects.all().delete()
+        self.assertEqual(EventConfig.objects.count(), 1)
+
+    def test_get_solo_and_load_methods_are_idempotent_and_preserve_edits(self):
+        config = EventConfig.get_solo()
+        config.event_status = 'active'
+        config.merge_concurrency = 12
+        config.save()
+
+        # Calling get_solo again returns the existing record with updated values
+        loaded_solo = EventConfig.get_solo()
+        self.assertEqual(loaded_solo.pk, 1)
+        self.assertEqual(loaded_solo.event_status, 'active')
+        self.assertEqual(loaded_solo.merge_concurrency, 12)
+
+        # Calling load alias returns identical instance
+        loaded_alias = EventConfig.load()
+        self.assertEqual(loaded_alias.pk, 1)
+        self.assertEqual(loaded_alias.event_status, 'active')
+        self.assertEqual(loaded_alias.merge_concurrency, 12)
+
+    def test_bootstrap_utility_function(self):
+        config = bootstrap_event_config()
+        self.assertIsNotNone(config)
+        self.assertEqual(config.pk, 1)
+        self.assertEqual(EventConfig.objects.count(), 1)
+
+    def test_bootstrap_management_command(self):
+        out = StringIO()
+        call_command('bootstrap_eventconfig', stdout=out)
+        output = out.getvalue()
+        self.assertIn("EventConfig singleton initialized successfully", output)
+        self.assertIn("ID: 1", output)
 
 
 @override_settings(
