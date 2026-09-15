@@ -861,6 +861,27 @@ plan; they are recorded, not resolved.
                                                            forgotten or treated
                                                            as the final health-
                                                            response shape.
+
+  AMB-15            Path traversal via   Resolved in       REPO_PATTERN regex
+                    dot-segment repo     M2-T1             allows dot-only parts
+                    names (NC-1)                           ('owner/..'). Resolved
+                                                           in M2-T1 by adding
+                                                           explicit validation
+                                                           in parse_repo_identifier
+                                                           rejecting dot-only
+                                                           segments.
+
+  AMB-16            Concurrent new-repo  Deferred to       select_for_update() on
+                    creation race in     M2-T4             empty queryset acquires
+                    sync_project (NC-4)                    no lock. Concurrent
+                                                           first-time syncs hit
+                                                           unique constraint
+                                                           IntegrityError. Safe
+                                                           for M2-T1 management
+                                                           command; M2-T4 Celery
+                                                           task layer must add
+                                                           get_or_create/retry
+                                                           semantics.
   --------------------------------------------------------------------------
 
 ------------------------------------------------------------------------
