@@ -1,7 +1,12 @@
 import datetime
+import urllib.parse
+from unittest.mock import MagicMock, patch
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.middleware.csrf import _get_new_csrf_string, _mask_cipher_secret
+from django.test import Client, TestCase, override_settings
 
 from core.models import (
     Participant,
@@ -212,3 +217,357 @@ class SchemaIntegrityTestCase(TestCase):
             details={'reason': 'Manual approval'},
         )
         self.assertIsNotNone(audit.id)
+
+
+@override_settings(
+    GITHUB_CLIENT_ID='test_client_id',
+    GITHUB_CLIENT_SECRET='test_client_secret',
+    GITHUB_REDIRECT_URI='http://localhost:8000/auth/github/callback/',
+    GITHUB_OAUTH_SCOPE='read:user',
+    FRONTEND_URL='http://localhost:5173',
+    FRONTEND_AUTH_REDIRECT_URL='http://localhost:5173/',
+    ALLOWED_HOSTS=['testserver', 'localhost', '127.0.0.1'],
+    CORS_ALLOWED_ORIGINS=['http://localhost:5173', 'http://127.0.0.1:5173'],
+)
+class GitHubOAuthTestCase(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='existing_user', email='existing@test.com')
+        self.participant = Participant.objects.create(
+            user=self.user,
+            github_id=55555,
+            github_username='existing_github_user',
+            avatar_url='https://avatars.githubusercontent.com/u/55555',
+            total_points=250,
+        )
+
+    def test_login_redirect_generates_state_and_stores_in_session(self):
+        response = self.client.get('/auth/github/login/')
+        self.assertEqual(response.status_code, 302)
+
+        redirect_url = response.url
+        self.assertTrue(redirect_url.startswith('https://github.com/login/oauth/authorize?'))
+
+        parsed = urllib.parse.urlparse(redirect_url)
+        params = urllib.parse.parse_qs(parsed.query)
+
+        self.assertEqual(params.get('client_id'), ['test_client_id'])
+        self.assertEqual(params.get('scope'), ['read:user'])
+        self.assertEqual(params.get('redirect_uri'), ['http://localhost:8000/auth/github/callback/'])
+        self.assertIn('state', params)
+
+        state = params['state'][0]
+        self.assertEqual(self.client.session.get('oauth_state'), state)
+
+    def test_login_preserves_valid_relative_next_url(self):
+        response = self.client.get('/auth/github/login/?next=/custom-dashboard')
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.client.session.get('oauth_next_url'), '/custom-dashboard')
+
+    def test_login_preserves_valid_frontend_next_url(self):
+        response = self.client.get('/auth/github/login/?next=http://localhost:5173/profile')
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.client.session.get('oauth_next_url'), 'http://localhost:5173/profile')
+
+    def test_login_discards_external_malicious_next_url(self):
+        response = self.client.get('/auth/github/login/?next=https://attacker.com/evil')
+        self.assertEqual(response.status_code, 302)
+        self.assertNotIn('oauth_next_url', self.client.session)
+
+    def test_login_discards_malformed_unsafe_next_url(self):
+        # javascript: URI scheme
+        response1 = self.client.get('/auth/github/login/?next=javascript:alert(1)')
+        self.assertEqual(response1.status_code, 302)
+        self.assertNotIn('oauth_next_url', self.client.session)
+
+        # scheme-relative URL pointing externally
+        response2 = self.client.get('/auth/github/login/?next=//evil.com/phish')
+        self.assertEqual(response2.status_code, 302)
+        self.assertNotIn('oauth_next_url', self.client.session)
+
+    @override_settings(GITHUB_CLIENT_ID='')
+    def test_login_fails_cleanly_if_client_id_missing(self):
+        response = self.client.get('/auth/github/login/')
+        self.assertEqual(response.status_code, 500)
+        data = response.json()
+        self.assertIn('error', data)
+
+    @patch('core.oauth.requests.post')
+    @patch('core.oauth.requests.get')
+    def test_callback_success_creates_new_participant_and_logs_in(self, mock_get, mock_post):
+        # Set state in session
+        session = self.client.session
+        session['oauth_state'] = 'valid_state_12345'
+        session.save()
+
+        # Mock token exchange response
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 200
+        mock_post_resp.json.return_value = {
+            'access_token': 'gho_new_token_abcdef',
+            'token_type': 'bearer',
+            'scope': 'read:user',
+        }
+        mock_post.return_value = mock_post_resp
+
+        # Mock user profile response
+        mock_get_resp = MagicMock()
+        mock_get_resp.status_code = 200
+        mock_get_resp.json.return_value = {
+            'id': 88888,
+            'login': 'newcontributor',
+            'avatar_url': 'https://avatars.githubusercontent.com/u/88888',
+            'email': 'newcontrib@example.com',
+        }
+        mock_get.return_value = mock_get_resp
+
+        response = self.client.get('/auth/github/callback/?code=auth_code_xyz&state=valid_state_12345')
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, 'http://localhost:5173/')
+
+        # Verify participant created
+        participant = Participant.objects.filter(github_id=88888).first()
+        self.assertIsNotNone(participant)
+        self.assertEqual(participant.github_username, 'newcontributor')
+        self.assertEqual(participant.avatar_url, 'https://avatars.githubusercontent.com/u/88888')
+        self.assertEqual(participant.total_points, 0)
+        self.assertFalse(participant.is_suspended)
+
+        # Verify session logged in
+        self.assertEqual(int(self.client.session.get('_auth_user_id')), participant.user.id)
+
+        # Verify state cleared from session
+        self.assertNotIn('oauth_state', self.client.session)
+
+    @patch('core.oauth.requests.post')
+    @patch('core.oauth.requests.get')
+    def test_callback_redirects_to_validated_next_url(self, mock_get, mock_post):
+        session = self.client.session
+        session['oauth_state'] = 'valid_state_next'
+        session['oauth_next_url'] = '/custom-dashboard'
+        session.save()
+
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 200
+        mock_post_resp.json.return_value = {'access_token': 'gho_token_123'}
+        mock_post.return_value = mock_post_resp
+
+        mock_get_resp = MagicMock()
+        mock_get_resp.status_code = 200
+        mock_get_resp.json.return_value = {'id': 77777, 'login': 'nextuser'}
+        mock_get.return_value = mock_get_resp
+
+        response = self.client.get('/auth/github/callback/?code=code_next&state=valid_state_next')
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, '/custom-dashboard')
+
+    @patch('core.oauth.requests.post')
+    @patch('core.oauth.requests.get')
+    def test_callback_falls_back_if_session_next_url_is_untrusted(self, mock_get, mock_post):
+        session = self.client.session
+        session['oauth_state'] = 'valid_state_tampered'
+        session['oauth_next_url'] = 'https://attacker.com/evil'
+        session.save()
+
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 200
+        mock_post_resp.json.return_value = {'access_token': 'gho_token_123'}
+        mock_post.return_value = mock_post_resp
+
+        mock_get_resp = MagicMock()
+        mock_get_resp.status_code = 200
+        mock_get_resp.json.return_value = {'id': 77778, 'login': 'fallbackuser'}
+        mock_get.return_value = mock_get_resp
+
+        response = self.client.get('/auth/github/callback/?code=code_next&state=valid_state_tampered')
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, 'http://localhost:5173/')
+
+    @patch('core.oauth.requests.post')
+    @patch('core.oauth.requests.get')
+    def test_callback_success_updates_existing_participant_and_does_not_duplicate(self, mock_get, mock_post):
+        initial_count = Participant.objects.count()
+
+        session = self.client.session
+        session['oauth_state'] = 'state_for_existing'
+        session.save()
+
+        # Mock token exchange
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 200
+        mock_post_resp.json.return_value = {'access_token': 'gho_existing_token'}
+        mock_post.return_value = mock_post_resp
+
+        # Mock user profile with updated username and avatar
+        mock_get_resp = MagicMock()
+        mock_get_resp.status_code = 200
+        mock_get_resp.json.return_value = {
+            'id': 55555,  # Same github_id as setUp
+            'login': 'renamed_github_user',
+            'avatar_url': 'https://newavatar.com/u/55555',
+        }
+        mock_get.return_value = mock_get_resp
+
+        response = self.client.get('/auth/github/callback/?code=code_123&state=state_for_existing')
+        self.assertEqual(response.status_code, 302)
+
+        # No duplicate created
+        self.assertEqual(Participant.objects.count(), initial_count)
+
+        # Profile updated
+        self.participant.refresh_from_db()
+        self.assertEqual(self.participant.github_username, 'renamed_github_user')
+        self.assertEqual(self.participant.avatar_url, 'https://newavatar.com/u/55555')
+        self.assertEqual(self.participant.total_points, 250)  # Points preserved
+
+        # User logged in
+        self.assertEqual(int(self.client.session.get('_auth_user_id')), self.participant.user.id)
+
+    def test_callback_invalid_state_rejected(self):
+        session = self.client.session
+        session['oauth_state'] = 'legitimate_state'
+        session.save()
+
+        response = self.client.get('/auth/github/callback/?code=valid_code&state=forged_state')
+        self.assertEqual(response.status_code, 400)
+        data = response.json()
+        self.assertIn('error', data)
+        self.assertIn('state', data['error'].lower())
+
+    def test_callback_missing_state_rejected(self):
+        session = self.client.session
+        session['oauth_state'] = 'legitimate_state'
+        session.save()
+
+        response = self.client.get('/auth/github/callback/?code=valid_code')
+        self.assertEqual(response.status_code, 400)
+        data = response.json()
+        self.assertIn('error', data)
+
+    def test_callback_github_cancellation_error_handled(self):
+        session = self.client.session
+        session['oauth_state'] = 'some_state'
+        session.save()
+
+        response = self.client.get('/auth/github/callback/?error=access_denied&error_description=User+cancelled')
+        self.assertEqual(response.status_code, 400)
+        data = response.json()
+        self.assertIn('error', data)
+        self.assertIn('cancelled', data['error'].lower())
+
+    @patch('core.oauth.requests.post')
+    def test_callback_token_exchange_error_handled(self, mock_post):
+        session = self.client.session
+        session['oauth_state'] = 'state_exchange_fail'
+        session.save()
+
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 200
+        mock_post_resp.json.return_value = {
+            'error': 'bad_verification_code',
+            'error_description': 'The code passed is incorrect or expired.',
+        }
+        mock_post.return_value = mock_post_resp
+
+        response = self.client.get('/auth/github/callback/?code=expired_code&state=state_exchange_fail')
+        self.assertEqual(response.status_code, 400)
+        data = response.json()
+        self.assertIn('error', data)
+        self.assertIn('expired', data['error'].lower())
+
+    @patch('core.oauth.requests.post')
+    @patch('core.oauth.requests.get')
+    def test_callback_profile_fetch_error_handled(self, mock_get, mock_post):
+        session = self.client.session
+        session['oauth_state'] = 'state_profile_fail'
+        session.save()
+
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 200
+        mock_post_resp.json.return_value = {'access_token': 'gho_good_token'}
+        mock_post.return_value = mock_post_resp
+
+        mock_get_resp = MagicMock()
+        mock_get_resp.status_code = 500
+        mock_get_resp.json.return_value = {'message': 'GitHub Internal Server Error'}
+        mock_get.return_value = mock_get_resp
+
+        response = self.client.get('/auth/github/callback/?code=good_code&state=state_profile_fail')
+        self.assertEqual(response.status_code, 502)
+        data = response.json()
+        self.assertIn('error', data)
+
+    def test_me_unauthenticated_returns_401(self):
+        response = self.client.get('/auth/me/')
+        self.assertEqual(response.status_code, 401)
+        data = response.json()
+        self.assertIn('detail', data)
+
+    def test_me_authenticated_participant_returns_profile(self):
+        self.client.force_login(self.participant.user)
+        response = self.client.get('/auth/me/')
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertEqual(data['id'], self.participant.id)
+        self.assertEqual(data['user_id'], self.participant.user.id)
+        self.assertEqual(data['github_id'], 55555)
+        self.assertEqual(data['github_username'], 'existing_github_user')
+        self.assertEqual(data['avatar_url'], 'https://avatars.githubusercontent.com/u/55555')
+        self.assertFalse(data['is_suspended'])
+        self.assertEqual(data['total_points'], 250)
+        self.assertTrue(data['is_authenticated'])
+
+    def test_logout_get_method_rejected(self):
+        self.client.force_login(self.participant.user)
+        response = self.client.get('/auth/logout/')
+        self.assertEqual(response.status_code, 405)
+
+    def test_logout_post_with_csrf_succeeds_and_clears_session(self):
+        # Use Client with enforce_csrf_checks=True
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.participant.user)
+
+        # Set valid CSRF cookie and header
+        secret = _get_new_csrf_string()
+        token = _mask_cipher_secret(secret)
+        csrf_client.cookies['csrftoken'] = secret
+
+        # POST with CSRF header
+        logout_resp = csrf_client.post('/auth/logout/', HTTP_X_CSRFTOKEN=token)
+        self.assertEqual(logout_resp.status_code, 200)
+        self.assertEqual(logout_resp.json(), {'detail': 'Successfully logged out.'})
+
+        # Verify session is unauthenticated
+        me_after = csrf_client.get('/auth/me/')
+        self.assertEqual(me_after.status_code, 401)
+
+    def test_logout_post_without_csrf_rejected_when_enforced(self):
+        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.participant.user)
+
+        # POST without CSRF token header
+        logout_resp = csrf_client.post('/auth/logout/')
+        self.assertEqual(logout_resp.status_code, 403)
+
+    def test_versioned_api_endpoints_work_identically(self):
+        # Unauthenticated /api/v1/auth/me/
+        resp_unauth = self.client.get('/api/v1/auth/me/')
+        self.assertEqual(resp_unauth.status_code, 401)
+
+        # Authenticated /api/v1/auth/me/
+        self.client.force_login(self.participant.user)
+        resp_auth = self.client.get('/api/v1/auth/me/')
+        self.assertEqual(resp_auth.status_code, 200)
+        self.assertEqual(resp_auth.json()['github_username'], 'existing_github_user')
+
+        # GET /api/v1/auth/logout/ rejected with 405
+        resp_get_logout = self.client.get('/api/v1/auth/logout/')
+        self.assertEqual(resp_get_logout.status_code, 405)
+
+        # POST /api/v1/auth/logout/ succeeds
+        resp_logout = self.client.post('/api/v1/auth/logout/')
+        self.assertEqual(resp_logout.status_code, 200)
+
+        resp_me_again = self.client.get('/api/v1/auth/me/')
+        self.assertEqual(resp_me_again.status_code, 401)
