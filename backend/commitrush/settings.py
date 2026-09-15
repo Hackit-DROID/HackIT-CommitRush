@@ -171,6 +171,9 @@ GITHUB_REDIRECT_URI = os.environ.get(
 # Minimum scope per PRD §13.1 & plan.md M1-T3. AMB-4 (email scope) remains open.
 GITHUB_OAUTH_SCOPE = os.environ.get('GITHUB_OAUTH_SCOPE', 'read:user')
 
+# GitHub REST API Service Token (PRD §13.6, §19, plan.md M2-T1)
+GITHUB_API_TOKEN = os.environ.get('GITHUB_API_TOKEN', '')
+
 # Frontend URLs for OAuth redirects
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
 FRONTEND_AUTH_REDIRECT_URL = os.environ.get('FRONTEND_AUTH_REDIRECT_URL', f'{FRONTEND_URL}/')
