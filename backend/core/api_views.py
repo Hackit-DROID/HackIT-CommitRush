@@ -1,13 +1,16 @@
 import logging
+from django.db import transaction
 from django.db.models import Q
 from rest_framework import exceptions, generics, permissions, status
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
+from rest_framework.views import APIView
 
-from core.models import Contribution, Issue, Project
+from core.models import AuditLog, Contribution, Issue, Participant, PointTransaction, Project
 from core.serializers import (
+    AdminPointAdjustmentSerializer,
     ContributionSerializer,
     IssueDetailSerializer,
     IssueListSerializer,
@@ -435,3 +438,104 @@ class ContributionDetailView(generics.RetrieveAPIView):
         'pull_request__repo',
     )
     lookup_field = 'pk'
+
+
+# =============================================================================
+# Admin Point Adjustment API (PRD §14, §16, Plan M6-T6)
+# =============================================================================
+
+class AdminPointAdjustmentView(APIView):
+    """
+    M6-T6: POST /api/v1/admin/points/adjust/
+    Allows administrative staff to manually adjust a participant's points (PRD §14, §16, Plan M6-T6).
+    Enforces:
+    - Server-side staff authorization (permissions.IsAdminUser).
+    - Non-negative balance constraint (rejects adjustments resulting in negative total).
+    - Atomic transaction with row-level locks on Participant.
+    - Immutable PointTransaction ledger entry (status='ADMIN_ADJUST').
+    - AuditLog audit trail creation.
+    """
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request):
+        serializer = AdminPointAdjustmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        participant_id = serializer.validated_data['participant_id']
+        points_delta = serializer.validated_data['points']
+        reason = serializer.validated_data['reason']
+
+        with transaction.atomic():
+            try:
+                participant = Participant.objects.select_for_update().get(id=participant_id)
+            except Participant.DoesNotExist:
+                return Response(
+                    {'error': f"Participant with ID {participant_id} not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            previous_points = participant.total_points
+            new_points = previous_points + points_delta
+
+            if new_points < 0:
+                return Response(
+                    {
+                        'error': 'Point adjustment would result in a negative point balance.',
+                        'current_points': previous_points,
+                        'requested_delta': points_delta,
+                        'resulting_points': new_points,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Update participant points
+            participant.total_points = new_points
+            participant.save(update_fields=['total_points'])
+
+            # Record ledger entry
+            pt = PointTransaction.objects.create(
+                contribution=None,
+                participant=participant,
+                points=points_delta,
+                status='ADMIN_ADJUST',
+                reason=reason,
+            )
+
+            # Record audit trail
+            AuditLog.objects.create(
+                actor=request.user,
+                action='admin_point_adjustment',
+                target_type='Participant',
+                target_id=str(participant.id),
+                details={
+                    'previous_points': previous_points,
+                    'new_points': new_points,
+                    'delta': points_delta,
+                    'reason': reason,
+                    'transaction_id': pt.id,
+                },
+            )
+
+            logger.info(
+                "Admin %s adjusted points for %s by %d (new total: %d, txn: %d, reason: '%s')",
+                request.user.username,
+                participant.github_username,
+                points_delta,
+                new_points,
+                pt.id,
+                reason,
+            )
+
+            return Response(
+                {
+                    'status': 'success',
+                    'participant_id': participant.id,
+                    'github_username': participant.github_username,
+                    'previous_points': previous_points,
+                    'new_points': new_points,
+                    'delta': points_delta,
+                    'transaction_id': pt.id,
+                    'reason': reason,
+                },
+                status=status.HTTP_200_OK,
+            )

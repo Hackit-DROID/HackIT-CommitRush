@@ -229,6 +229,7 @@ class ContributionSerializer(serializers.ModelSerializer):
             'pull_request',
             'status',
             'sub_status',
+            'is_priority',
             'retry_count',
             'flagged_reason',
             'approved_at',
@@ -237,3 +238,29 @@ class ContributionSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = fields
+
+
+class AdminPointAdjustmentSerializer(serializers.Serializer):
+    """
+    Serializer for admin manual point adjustments (PRD §14, §16, Plan M6-T6).
+    Validates participant existence, non-zero integer delta, and required reason.
+    """
+    participant_id = serializers.IntegerField(required=True, min_value=1)
+    points = serializers.IntegerField(required=True)
+    reason = serializers.CharField(required=True, min_length=1, max_length=1000)
+
+    def validate_points(self, value: int) -> int:
+        if value == 0:
+            raise serializers.ValidationError("Point adjustment delta must be non-zero.")
+        return value
+
+    def validate_reason(self, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise serializers.ValidationError("A non-empty reason is required for manual point adjustments.")
+        return cleaned
+
+    def validate_participant_id(self, value: int) -> int:
+        if not Participant.objects.filter(id=value).exists():
+            raise serializers.ValidationError(f"Participant with ID {value} does not exist.")
+        return value
