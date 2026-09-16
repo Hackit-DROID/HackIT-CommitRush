@@ -12,6 +12,7 @@ from core.auth_views import (
     me_view,
 )
 from core.health_views import health_view
+from core.webhook_views import github_webhook_view
 
 urlpatterns = [
     path('health/', health_view, name='health'),
@@ -24,4 +25,6 @@ urlpatterns = [
     path('projects/<path:slug>/', ProjectDetailView.as_view(), name='project-detail'),
     path('issues/', IssueListView.as_view(), name='issue-list'),
     path('issues/<int:pk>/', IssueDetailView.as_view(), name='issue-detail'),
+    # M4 GitHub Webhook Receiver (PRD §13.2, §16, Plan M4-T1)
+    path('webhooks/github/', github_webhook_view, name='github-webhook'),
 ]

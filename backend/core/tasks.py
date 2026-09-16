@@ -138,3 +138,42 @@ def sync_repository_task(
     except Exception as e:
         logger.exception("Unexpected error in sync_repository_task for %s/%s", owner, repo)
         raise
+
+
+@shared_task(
+    bind=True,
+    name='core.tasks.process_webhook_event_task',
+    queue='webhooks',
+    max_retries=3,
+)
+def process_webhook_event_task(self, webhook_event_id: int) -> dict:
+    """
+    Celery task to asynchronously process inbound GitHub webhook events.
+    Routed to the high-priority 'webhooks' queue (PRD §10.1, §12.1, §13.3, plan.md M4-T3).
+    Idempotently handles pull_request and issues events.
+    """
+    from core.models import WebhookEvent
+    from core.webhook_processing import process_webhook_event
+
+    webhook_event = WebhookEvent.objects.filter(id=webhook_event_id).first()
+    if not webhook_event:
+        logger.warning("WebhookEvent %s not found for processing", webhook_event_id)
+        return {'status': 'not_found', 'webhook_event_id': webhook_event_id}
+
+    try:
+        result = process_webhook_event(webhook_event)
+        return {
+            'status': 'success',
+            'delivery_id': webhook_event.delivery_id,
+            'result': result,
+        }
+    except Exception as e:
+        logger.exception("Error processing webhook event %s (delivery_id=%s)", webhook_event_id, webhook_event.delivery_id)
+        retries = self.request.retries
+        if retries < 3:
+            raise self.retry(exc=e, countdown=2 ** retries, max_retries=3)
+        return {
+            'status': 'failed',
+            'delivery_id': webhook_event.delivery_id,
+            'error': str(e),
+        }

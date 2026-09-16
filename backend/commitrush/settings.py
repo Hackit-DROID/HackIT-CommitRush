@@ -181,6 +181,9 @@ GITHUB_OAUTH_SCOPE = os.environ.get('GITHUB_OAUTH_SCOPE', 'read:user')
 # GitHub REST API Service Token (PRD §13.6, §19, plan.md M2-T1)
 GITHUB_API_TOKEN = os.environ.get('GITHUB_API_TOKEN', '')
 
+# GitHub Webhook Secret (PRD §13.2, §16, §19, plan.md M4-T1)
+GITHUB_WEBHOOK_SECRET = os.environ.get('GITHUB_WEBHOOK_SECRET', '')
+
 # Frontend URLs for OAuth redirects
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
 FRONTEND_AUTH_REDIRECT_URL = os.environ.get('FRONTEND_AUTH_REDIRECT_URL', f'{FRONTEND_URL}/')
@@ -201,7 +204,7 @@ CSRF_TRUSTED_ORIGINS = [
     if origin.strip()
 ]
 
-# Celery Configuration (PRD §10.1, §13.6, plan.md M2-T4)
+# Celery Configuration (PRD §10.1, §13.6, plan.md M2-T4, M4-T3)
 # Redis is the broker and result backend. Configuration is backed by environment variables.
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
@@ -212,6 +215,10 @@ CELERY_TIMEZONE = 'UTC'
 CELERY_ENABLE_UTC = True
 CELERY_TASK_DEFAULT_QUEUE = 'default'
 CELERY_TASK_QUEUES = {
+    'webhooks': {
+        'exchange': 'webhooks',
+        'routing_key': 'webhooks',
+    },
     'sync': {
         'exchange': 'sync',
         'routing_key': 'sync',
@@ -223,4 +230,5 @@ CELERY_TASK_QUEUES = {
 }
 CELERY_TASK_ROUTES = {
     'core.tasks.sync_repository_task': {'queue': 'sync'},
+    'core.tasks.process_webhook_event_task': {'queue': 'webhooks'},
 }
