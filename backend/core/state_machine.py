@@ -26,13 +26,13 @@ class UnauthorizedTransitionError(InvalidStateTransitionError):
 
 # Canonical automatic transitions per PRD §11.2
 ALLOWED_AUTOMATIC_TRANSITIONS: dict[str, set[str]] = {
-    'PENDING': {'QUEUED', 'REJECTED'},
-    'QUEUED': {'UNDER_REVIEW', 'REJECTED'},
-    'UNDER_REVIEW': {'APPROVED', 'REJECTED', 'FLAGGED', 'RETRY'},
-    'RETRY': {'UNDER_REVIEW', 'FLAGGED', 'REJECTED'},
-    'APPROVED': {'MERGING', 'REJECTED'},
-    'MERGING': {'MERGED', 'RETRY', 'REJECTED'},
-    'FLAGGED': set(),
+    'PENDING': {'QUEUED', 'MERGED', 'REJECTED'},
+    'QUEUED': {'UNDER_REVIEW', 'MERGED', 'REJECTED'},
+    'UNDER_REVIEW': {'APPROVED', 'MERGED', 'REJECTED', 'FLAGGED', 'RETRY'},
+    'RETRY': {'UNDER_REVIEW', 'MERGING', 'MERGED', 'FLAGGED', 'REJECTED'},
+    'APPROVED': {'MERGING', 'MERGED', 'REJECTED'},
+    'MERGING': {'MERGED', 'RETRY', 'FLAGGED', 'REJECTED'},
+    'FLAGGED': {'MERGED', 'REJECTED'},
     'REJECTED': set(),
     'MERGED': set(),
 }

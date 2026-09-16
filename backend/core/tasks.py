@@ -358,3 +358,106 @@ def requeue_stale_contributions_task(self, timeout_minutes: int | None = None) -
     except Exception as e:
         logger.exception("Error in requeue_stale_contributions_task")
         raise
+
+
+@shared_task(
+    bind=True,
+    name='core.tasks.merge_contribution_task',
+    queue='merge',
+    max_retries=None,
+)
+def merge_contribution_task(self, contribution_id: int) -> dict:
+    """
+    Celery task to execute merge bot on an APPROVED/MERGING Contribution (PRD §12.3, Plan M6-T2, M6-T4).
+    Routed to the dedicated 'merge' queue.
+    Enforces concurrency bounds using RedisMergeSemaphore and deduplication using RedisContributionLock.
+    """
+    from core.models import EventConfig
+    from core.merge_service import execute_merge
+    from core.semaphore import RedisContributionLock, RedisMergeSemaphore
+
+    config = EventConfig.get_solo()
+    if config.merge_paused:
+        logger.info("Merge operations paused; requeuing merge_contribution_task for Contribution %s", contribution_id)
+        raise self.retry(countdown=30, max_retries=None)
+
+    # 1. Acquire per-contribution lock (deduplication / idempotency per PRD §12.4)
+    contrib_lock = RedisContributionLock(contribution_id, ttl=60)
+    if not contrib_lock.acquire():
+        logger.info("Contribution %s is already being processed by another worker; skipping duplicate task.", contribution_id)
+        return {'status': 'duplicate_skipped', 'contribution_id': contribution_id}
+
+    # 2. Acquire global concurrency semaphore
+    semaphore = RedisMergeSemaphore()
+    acquired = semaphore.acquire()
+    if not acquired:
+        contrib_lock.release()
+        logger.info("Merge concurrency limit reached; requeuing merge_contribution_task for Contribution %s in 5s", contribution_id)
+        raise self.retry(countdown=5, max_retries=None)
+
+    try:
+        result = execute_merge(contribution_id)
+        if result.get('status') == 'rate_limited':
+            delay = 60
+            if result.get('retry_after') and result['retry_after'] > 0:
+                delay = result['retry_after']
+            elif result.get('reset_timestamp'):
+                now = int(time.time())
+                delay = max(result['reset_timestamp'] - now, 10)
+            logger.warning("GitHub rate limit during merge for %s; requeuing in %ds", contribution_id, delay)
+            raise self.retry(countdown=delay, max_retries=None)
+
+        if result.get('status') == 'retry':
+            countdown = result.get('countdown', 5)
+            logger.info("Retrying merge for Contribution %s in %ds", contribution_id, countdown)
+            raise self.retry(countdown=countdown, max_retries=None)
+
+        return result
+    finally:
+        semaphore.release()
+        contrib_lock.release()
+
+
+@shared_task(
+    bind=True,
+    name='core.tasks.process_merge_queue_task',
+    queue='merge',
+    max_retries=3,
+)
+def process_merge_queue_task(self, batch_size: int | None = None) -> dict:
+    """
+    Periodic Celery beat task to scan the merge queue and dispatch merge tasks for APPROVED contributions (Plan M6-T2, M6-T3).
+    Respects EventConfig.merge_paused and EventConfig.merge_concurrency.
+    """
+    from core.models import EventConfig
+    from core.merge_service import claim_next_approved_contribution
+    from core.semaphore import RedisMergeSemaphore
+
+    config = EventConfig.get_solo()
+    if config.merge_paused:
+        logger.info("Merge operations paused in EventConfig; skipping process_merge_queue_task.")
+        return {'status': 'paused', 'dispatched': 0}
+
+    semaphore = RedisMergeSemaphore()
+    max_limit = config.merge_concurrency
+    current_usage = semaphore.get_current_usage()
+    available_slots = max(0, max_limit - current_usage)
+
+    limit = batch_size or available_slots or max_limit
+    dispatched = 0
+    dispatched_ids = []
+
+    for _ in range(limit):
+        claimed = claim_next_approved_contribution()
+        if not claimed:
+            break
+        merge_contribution_task.delay(claimed.id)
+        dispatched += 1
+        dispatched_ids.append(claimed.id)
+
+    logger.info("Dispatched %d contributions from merge queue: %s", dispatched, dispatched_ids)
+    return {
+        'status': 'success',
+        'dispatched': dispatched,
+        'dispatched_ids': dispatched_ids,
+    }

@@ -235,16 +235,22 @@ def handle_pull_request_event(payload: dict) -> dict:
                                 participant=participant,
                                 pull_request=pr_obj,
                                 issue=matching_issue,
-                                status='MERGED',
-                                merged_at=pr_obj.merged_at,
+                                status='PENDING',
                             )
                             contributions = [contrib]
 
-                # Transition associated contributions to MERGED
+                # Transition associated contributions to MERGED via state machine and trigger transactional point award
+                from core.state_machine import transition_contribution
                 for contrib in contributions:
-                    contrib.status = 'MERGED'
-                    contrib.merged_at = pr_obj.merged_at
-                    contrib.save(update_fields=['status', 'merged_at', 'updated_at'])
+                    try:
+                        transition_contribution(contrib.id, 'MERGED')
+                    except Exception as e:
+                        logger.warning("Could not transition contribution %s to MERGED: %s", contrib.id, e)
+                    try:
+                        from core.points import award_points_for_contribution
+                        award_points_for_contribution(contrib.id)
+                    except Exception as e:
+                        logger.exception("Error awarding points for merged contribution %s: %s", contrib.id, e)
 
                 logger.info("PR #%d merged in %s; transitioned %d contribution(s) to MERGED", pr_number, project.full_name, len(contributions))
                 return {
@@ -273,15 +279,22 @@ def handle_pull_request_event(payload: dict) -> dict:
                                 participant=participant,
                                 pull_request=pr_obj,
                                 issue=matching_issue,
-                                status='REJECTED',
+                                status='PENDING',
                             )
                             contributions = [contrib]
 
-                # Transition associated contributions to REJECTED (closed without merge)
+                # Transition associated contributions to REJECTED (closed without merge) via state machine
+                from core.state_machine import transition_contribution
                 for contrib in contributions:
                     if contrib.status != 'MERGED':
-                        contrib.status = 'REJECTED'
-                        contrib.save(update_fields=['status', 'updated_at'])
+                        try:
+                            transition_contribution(
+                                contrib.id,
+                                'REJECTED',
+                                reason="Pull request closed on GitHub without merge.",
+                            )
+                        except Exception as e:
+                            logger.warning("Could not transition contribution %s to REJECTED: %s", contrib.id, e)
 
                 logger.info("PR #%d closed without merge in %s; transitioned %d contribution(s) to REJECTED", pr_number, project.full_name, len(contributions))
                 return {

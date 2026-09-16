@@ -112,6 +112,13 @@ def validate_contribution(contribution_id: int) -> dict:
             reason=reason,
         )
 
+        if verdict == 'APPROVED':
+            try:
+                from core.tasks import process_merge_queue_task
+                process_merge_queue_task.delay()
+            except Exception as e:
+                logger.warning("Could not enqueue process_merge_queue_task: %s", e)
+
         return {
             'status': verdict.lower(),
             'contribution_id': updated_contrib.id,
