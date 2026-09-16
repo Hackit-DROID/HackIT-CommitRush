@@ -11,6 +11,7 @@ import { LeaderboardPage } from './pages/LeaderboardPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { PublicProfilePage } from './pages/PublicProfilePage';
 import { StatsPage } from './pages/StatsPage';
+import OpsPanelPage from './pages/OpsPanelPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,6 +41,8 @@ export function App() {
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/profile/:username" element={<PublicProfilePage />} />
             <Route path="/stats" element={<StatsPage />} />
+            {/* M8 Ops Panel Route (PRD §12.6, §18, Plan M8-T6) */}
+            <Route path="/ops" element={<OpsPanelPage />} />
             <Route path="*" element={<Navigate to="/issues" replace />} />
           </Routes>
         </Layout>

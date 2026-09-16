@@ -18,6 +18,7 @@ export function Layout({ children }: LayoutProps) {
   const isDashboardActive = location.pathname.startsWith('/dashboard');
   const isContributionsActive = location.pathname.startsWith('/contributions');
   const isStatsActive = location.pathname.startsWith('/stats');
+  const isOpsActive = location.pathname.startsWith('/ops');
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
@@ -97,6 +98,16 @@ export function Layout({ children }: LayoutProps) {
                 }`}
               >
                 Stats
+              </Link>
+              <Link
+                to="/ops"
+                className={`px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
+                  isOpsActive
+                    ? 'bg-indigo-900/60 text-indigo-300 border border-indigo-700/60 shadow-sm'
+                    : 'text-slate-400 hover:text-indigo-300 hover:bg-indigo-950/40'
+                }`}
+              >
+                Ops
               </Link>
             </nav>
           </div>

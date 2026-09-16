@@ -263,6 +263,32 @@ export interface EventStats {
   updated_at: string;
 }
 
+export interface OpsQueues {
+  validation_queued: number;
+  validation_under_review: number;
+  merge_approved: number;
+  merge_active: number;
+  flagged_or_retry: number;
+  webhooks_total: number;
+  webhooks_unprocessed: number;
+}
+
+export interface OpsSemaphore {
+  configured_concurrency: number;
+  active_semaphore_slots: number;
+  available_slots: number;
+}
+
+export interface OpsMetrics {
+  event_status: string;
+  system_status: SystemStatus;
+  queues: OpsQueues;
+  semaphore: OpsSemaphore;
+  oldest_queued_item_age_seconds: number | null;
+  last_webhook_received_at: string | null;
+  generated_at: string;
+}
+
 export class ApiError extends Error {
   status: number;
   data: unknown;
