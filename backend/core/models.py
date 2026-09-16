@@ -38,10 +38,16 @@ class Participant(models.Model):
         default=0,
         help_text='Denormalized total points counter',
     )
+    merged_count = models.IntegerField(
+        default=0,
+        help_text='Denormalized count of merged contributions (PRD §15)',
+    )
 
     class Meta:
         indexes = [
             models.Index(fields=['-total_points'], name='participant_total_pts_idx'),
+            models.Index(fields=['-total_points', '-merged_count', 'id'], name='participant_leaderboard_idx'),
+            models.Index(fields=['github_username'], name='participant_username_idx'),
         ]
 
     def __str__(self):
@@ -459,6 +465,11 @@ class EventConfig(models.Model):
         default=False,
         help_text='Emergency control: freeze public leaderboard rankings',
     )
+    leaderboard_frozen_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Timestamp when leaderboard was frozen',
+    )
     event_status = models.CharField(
         max_length=50,
         default='pending',
@@ -470,10 +481,31 @@ class EventConfig(models.Model):
 
     def save(self, *args, **kwargs):
         self.pk = 1
+        freeze_toggled = False
         if self.__class__.objects.filter(pk=1).exists():
             self._state.adding = False
             kwargs.pop('force_insert', None)
+            existing = self.__class__.objects.filter(pk=1).values('leaderboard_frozen', 'leaderboard_frozen_at').first()
+            if existing:
+                if self.leaderboard_frozen and not existing['leaderboard_frozen']:
+                    self.leaderboard_frozen_at = timezone.now()
+                    freeze_toggled = True
+                elif not self.leaderboard_frozen and existing['leaderboard_frozen']:
+                    self.leaderboard_frozen_at = None
+                    freeze_toggled = True
+        else:
+            if self.leaderboard_frozen and not self.leaderboard_frozen_at:
+                self.leaderboard_frozen_at = timezone.now()
+                freeze_toggled = True
         super().save(*args, **kwargs)
+
+        if freeze_toggled:
+            try:
+                from core.leaderboard import invalidate_frozen_leaderboard_cache, invalidate_leaderboard_cache
+                invalidate_frozen_leaderboard_cache()
+                invalidate_leaderboard_cache()
+            except Exception:
+                pass
 
     def delete(self, *args, **kwargs):
         raise IntegrityError("The EventConfig singleton instance cannot be deleted.")
@@ -493,6 +525,7 @@ class EventConfig(models.Model):
                 'validation_paused': False,
                 'submissions_paused': False,
                 'leaderboard_frozen': False,
+                'leaderboard_frozen_at': None,
                 'event_status': 'pending',
             },
         )

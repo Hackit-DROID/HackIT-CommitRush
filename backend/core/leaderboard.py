@@ -1,0 +1,210 @@
+import json
+import logging
+import math
+from django.conf import settings
+from django.core.cache import cache
+from django.db.models import F, Q, Window
+from django.db.models.functions import RowNumber
+from django.utils import timezone
+
+from core.models import EventConfig, Participant
+
+logger = logging.getLogger(__name__)
+
+LEADERBOARD_CACHE_PREFIX = 'commitrush:leaderboard'
+LEADERBOARD_FROZEN_CACHE_PREFIX = 'commitrush:leaderboard:frozen'
+LEADERBOARD_CACHE_TTL = 60  # seconds (PRD §20)
+
+
+def get_leaderboard_queryset():
+    """
+    Returns the authoritative Participant queryset ordered by:
+    1. total_points DESC
+    2. merged_count DESC
+    3. id ASC (deterministic final tie-breaker)
+    Excludes suspended participants from public rankings (PRD §8.6, §15, §18).
+    Annotates row rank using the database RowNumber window function.
+    """
+    return (
+        Participant.objects.filter(is_suspended=False)
+        .annotate(
+            rank=Window(
+                expression=RowNumber(),
+                order_by=[
+                    F('total_points').desc(),
+                    F('merged_count').desc(),
+                    F('id').asc(),
+                ]
+            )
+        )
+        .order_by('-total_points', '-merged_count', 'id')
+    )
+
+
+def calculate_participant_rank(participant_id: int) -> int | None:
+    """
+    Calculates the exact global rank of a single participant (PRD §8.6, §16).
+    Returns None if the participant is suspended or does not exist.
+    Uses an indexed O(log N) count query matching the exact leaderboard ordering:
+    total_points DESC, merged_count DESC, id ASC.
+    """
+    try:
+        participant = Participant.objects.get(id=participant_id)
+    except Participant.DoesNotExist:
+        return None
+
+    if participant.is_suspended:
+        return None
+
+    # Count all active participants that rank ahead of this participant
+    higher_count = Participant.objects.filter(is_suspended=False).filter(
+        Q(total_points__gt=participant.total_points) |
+        Q(total_points=participant.total_points, merged_count__gt=participant.merged_count) |
+        Q(total_points=participant.total_points, merged_count=participant.merged_count, id__lt=participant.id)
+    ).count()
+
+    return higher_count + 1
+
+
+def get_cached_leaderboard_page(page: int = 1, page_size: int = 20, is_frozen: bool = False) -> dict | None:
+    """
+    Retrieves a cached leaderboard page dictionary from Redis cache.
+    Returns None on cache miss or cache error.
+    """
+    prefix = LEADERBOARD_FROZEN_CACHE_PREFIX if is_frozen else LEADERBOARD_CACHE_PREFIX
+    key = f"{prefix}:page_{page}_size_{page_size}"
+    try:
+        data = cache.get(key)
+        if data:
+            return data
+    except Exception as e:
+        logger.warning("Redis cache read error for leaderboard key %s: %s", key, e)
+    return None
+
+
+def set_cached_leaderboard_page(page: int, page_size: int, is_frozen: bool, data: dict, ttl: int = LEADERBOARD_CACHE_TTL):
+    """
+    Sets a cached leaderboard page dictionary in Redis cache.
+    """
+    prefix = LEADERBOARD_FROZEN_CACHE_PREFIX if is_frozen else LEADERBOARD_CACHE_PREFIX
+    key = f"{prefix}:page_{page}_size_{page_size}"
+    try:
+        # If frozen, persist without expiry or with a long TTL (e.g. 24h)
+        cache.set(key, data, timeout=ttl if not is_frozen else 86400)
+    except Exception as e:
+        logger.warning("Redis cache write error for leaderboard key %s: %s", key, e)
+
+
+def invalidate_leaderboard_cache():
+    """
+    Invalidates live leaderboard cache keys in Redis (PRD §20, Plan M7-T1).
+    Called on point award or admin adjustment.
+    Does NOT invalidate frozen snapshot keys when event is frozen.
+    """
+    try:
+        if hasattr(cache, 'delete_pattern'):
+            cache.delete_pattern(f"{LEADERBOARD_CACHE_PREFIX}:*")
+        else:
+            client = getattr(cache, 'client', None)
+            if client and hasattr(client, 'get_client'):
+                raw_client = client.get_client()
+                keys = raw_client.keys(f":1:{LEADERBOARD_CACHE_PREFIX}:*") or raw_client.keys(f"{LEADERBOARD_CACHE_PREFIX}:*")
+                if keys:
+                    raw_client.delete(*keys)
+            else:
+                for p in range(1, 51):
+                    for size in (10, 20, 50, 100):
+                        cache.delete(f"{LEADERBOARD_CACHE_PREFIX}:page_{p}_size_{size}")
+    except Exception as e:
+        logger.warning("Redis cache invalidation error for leaderboard: %s", e)
+
+
+def invalidate_frozen_leaderboard_cache():
+    """
+    Invalidates frozen leaderboard snapshot cache keys in Redis when unfreeze occurs.
+    """
+    try:
+        if hasattr(cache, 'delete_pattern'):
+            cache.delete_pattern(f"{LEADERBOARD_FROZEN_CACHE_PREFIX}:*")
+        else:
+            client = getattr(cache, 'client', None)
+            if client and hasattr(client, 'get_client'):
+                raw_client = client.get_client()
+                keys = raw_client.keys(f":1:{LEADERBOARD_FROZEN_CACHE_PREFIX}:*") or raw_client.keys(f"{LEADERBOARD_FROZEN_CACHE_PREFIX}:*")
+                if keys:
+                    raw_client.delete(*keys)
+            else:
+                for p in range(1, 51):
+                    for size in (10, 20, 50, 100):
+                        cache.delete(f"{LEADERBOARD_FROZEN_CACHE_PREFIX}:page_{p}_size_{size}")
+    except Exception as e:
+        logger.warning("Redis cache invalidation error for frozen leaderboard: %s", e)
+
+
+def fetch_leaderboard_data(page: int = 1, page_size: int = 20, current_participant: Participant | None = None) -> dict:
+    """
+    Fetches paginated leaderboard data from cache or authoritative PostgreSQL database.
+    Respects EventConfig.leaderboard_frozen state (M7-T2).
+    Includes the requester's own rank if requested/authenticated (M7-T1).
+    """
+    config = EventConfig.get_solo()
+    is_frozen = bool(config.leaderboard_frozen)
+
+    cached_page = get_cached_leaderboard_page(page=page, page_size=page_size, is_frozen=is_frozen)
+    if cached_page is not None:
+        count = cached_page['count']
+        total_pages = cached_page['total_pages']
+        results = cached_page['results']
+    else:
+        # Cache miss or Redis down: calculate from authoritative database
+        total_count = Participant.objects.filter(is_suspended=False).count()
+        total_pages = math.ceil(total_count / page_size) if total_count > 0 else 1
+        offset = (page - 1) * page_size
+
+        if offset >= total_count and total_count > 0:
+            results = []
+        else:
+            qs = get_leaderboard_queryset()[offset : offset + page_size]
+            results = [
+                {
+                    'rank': row.rank,
+                    'participant_id': row.id,
+                    'github_username': row.github_username,
+                    'avatar_url': row.avatar_url,
+                    'total_points': row.total_points,
+                    'merged_count': row.merged_count,
+                }
+                for row in qs
+            ]
+
+        page_data = {
+            'count': total_count,
+            'total_pages': total_pages,
+            'results': results,
+        }
+        set_cached_leaderboard_page(page=page, page_size=page_size, is_frozen=is_frozen, data=page_data)
+        count = total_count
+
+    # Resolve requester's own rank if participant is authenticated
+    me_data = None
+    if current_participant is not None:
+        rank = calculate_participant_rank(current_participant.id)
+        if rank is not None:
+            me_data = {
+                'rank': rank,
+                'participant_id': current_participant.id,
+                'github_username': current_participant.github_username,
+                'avatar_url': current_participant.avatar_url,
+                'total_points': current_participant.total_points,
+                'merged_count': current_participant.merged_count,
+            }
+
+    return {
+        'count': count,
+        'page': page,
+        'page_size': page_size,
+        'total_pages': total_pages,
+        'is_frozen': is_frozen,
+        'results': results,
+        'me': me_data,
+    }
