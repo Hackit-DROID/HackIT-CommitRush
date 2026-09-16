@@ -362,6 +362,122 @@ class GitHubClient:
 
         return all_issues
 
+    def get_pull_requests(self, owner: str, repo: str, state: str = 'all') -> list[dict]:
+        """
+        Fetch all pull requests for repository from GET /repos/{owner}/{repo}/pulls.
+        Handles multi-page pagination.
+        Inspects rate-limit headers across pages and raises GitHubRateLimitError if quota falls below 10%.
+        """
+        if not owner or not repo:
+            raise ValueError("Owner and repository name must be non-empty.")
+
+        url = f"{self.base_url}/repos/{owner}/{repo}/pulls"
+        headers = self._get_headers()
+        params = {
+            'state': state,
+            'per_page': 100,
+            'page': 1,
+        }
+
+        all_prs = []
+
+        while url:
+            try:
+                response = self.session.get(
+                    url,
+                    headers=headers,
+                    params=params,
+                    timeout=self.timeout,
+                )
+            except requests.Timeout as e:
+                logger.warning("GitHub API request timed out fetching pull requests for %s/%s", owner, repo)
+                raise GitHubNetworkError(f"GitHub API request timed out after {self.timeout}s.") from e
+            except requests.RequestException as e:
+                logger.warning("GitHub API network failure fetching pull requests for %s/%s", owner, repo)
+                raise GitHubNetworkError("Failed to communicate with GitHub REST API.") from e
+
+            self._record_rate_limit(response)
+
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                except ValueError as e:
+                    raise GitHubDataError("Invalid JSON returned by GitHub API.") from e
+
+                if not isinstance(data, list):
+                    raise GitHubDataError("Malformed response payload returned by GitHub API (expected JSON array).")
+
+                for item in data:
+                    if isinstance(item, dict) and 'id' in item and 'number' in item:
+                        all_prs.append(item)
+
+                if self.is_low_quota(threshold=0.10):
+                    logger.warning(
+                        "GitHub API rate limit quota dropped below 10%% (%s/%s) fetching pull requests for %s/%s",
+                        self.last_rate_limit.get('remaining'),
+                        self.last_rate_limit.get('limit'),
+                        owner,
+                        repo,
+                    )
+                    raise GitHubRateLimitError(
+                        "GitHub API quota dropped below 10% safety threshold.",
+                        remaining=self.last_rate_limit.get('remaining'),
+                        limit=self.last_rate_limit.get('limit'),
+                        reset_timestamp=self.last_rate_limit.get('reset'),
+                        retry_after=self.last_rate_limit.get('retry_after'),
+                    )
+
+                link_header = response.headers.get('Link')
+                if link_header and 'rel="next"' in link_header:
+                    params = None
+                    links = requests.utils.parse_header_links(link_header)
+                    next_link = next((item['url'] for item in links if item.get('rel') == 'next'), None)
+                    url = next_link
+                else:
+                    url = None
+                continue
+
+            if response.status_code == 404:
+                logger.info("GitHub repository %s/%s not found when fetching pull requests (HTTP 404)", owner, repo)
+                raise GitHubResourceNotFoundError(f"Repository '{owner}/{repo}' was not found on GitHub (HTTP 404).")
+
+            if response.status_code == 401:
+                logger.warning("GitHub authentication failed fetching pull requests for %s/%s (HTTP 401)", owner, repo)
+                raise GitHubAuthenticationError("GitHub API authentication failed (HTTP 401). Verify GITHUB_API_TOKEN configuration.")
+
+            if response.status_code == 403:
+                rate_remaining = response.headers.get('X-RateLimit-Remaining')
+                if rate_remaining == '0':
+                    logger.warning("GitHub API rate limit reached (HTTP 403) fetching pull requests")
+                    raise GitHubRateLimitError(
+                        "GitHub API rate limit exceeded (HTTP 403).",
+                        remaining=0,
+                        limit=self.last_rate_limit.get('limit'),
+                        reset_timestamp=self.last_rate_limit.get('reset'),
+                        retry_after=self.last_rate_limit.get('retry_after'),
+                    )
+                logger.warning("GitHub API permission denied or rate limited (HTTP 403) for %s/%s", owner, repo)
+                raise GitHubAuthenticationError(f"GitHub API permission denied or rate limited (HTTP 403) for '{owner}/{repo}'.")
+
+            if response.status_code == 429:
+                logger.warning("GitHub API rate limit reached (HTTP 429) fetching pull requests")
+                raise GitHubRateLimitError(
+                    "GitHub API rate limit reached (HTTP 429).",
+                    remaining=self.last_rate_limit.get('remaining'),
+                    limit=self.last_rate_limit.get('limit'),
+                    reset_timestamp=self.last_rate_limit.get('reset'),
+                    retry_after=self.last_rate_limit.get('retry_after'),
+                )
+
+            if response.status_code >= 500:
+                logger.warning("GitHub API server error HTTP %s fetching pull requests for %s/%s", response.status_code, owner, repo)
+                raise GitHubAPIError(f"GitHub API server error (HTTP {response.status_code}).")
+
+            logger.warning("GitHub API unexpected response HTTP %s fetching pull requests for %s/%s", response.status_code, owner, repo)
+            raise GitHubAPIError(f"GitHub API returned unexpected status {response.status_code}.")
+
+        return all_prs
+
 
 def sync_project(repo_data: dict) -> tuple[Project, bool]:
     """

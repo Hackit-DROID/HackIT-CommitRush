@@ -177,3 +177,131 @@ def process_webhook_event_task(self, webhook_event_id: int) -> dict:
             'delivery_id': webhook_event.delivery_id,
             'error': str(e),
         }
+
+
+@shared_task(
+    bind=True,
+    name='core.tasks.reconcile_recent_repositories_task',
+    queue='sync',
+    max_retries=TRANSIENT_MAX_RETRIES,
+)
+def reconcile_recent_repositories_task(
+    self,
+    window_minutes: int | None = None,
+    rate_limit_retries: int = 0,
+) -> dict:
+    """
+    Scheduled Celery beat task to reconcile repositories with no recent webhook activity.
+    Runs every N minutes (default 15). Routed to low-priority 'sync' queue.
+    Rate-limit aware per PRD §13.6 and plan.md M4-T5.
+    """
+    from core.reconciliation import reconcile_recent_repositories
+
+    client = GitHubClient()
+    try:
+        return reconcile_recent_repositories(window_minutes=window_minutes, client=client)
+    except GitHubRateLimitError as e:
+        logger.warning(
+            "GitHub rate limit reached in reconcile_recent_repositories_task (remaining: %s, reset: %s, retry_after: %s)",
+            e.remaining, e.reset_timestamp, e.retry_after,
+        )
+        delay = 60
+        if e.retry_after is not None and e.retry_after > 0:
+            delay = e.retry_after
+        elif e.reset_timestamp is not None:
+            now = int(time.time())
+            delay = max(e.reset_timestamp - now, 10)
+
+        raise self.retry(
+            exc=e,
+            countdown=delay,
+            max_retries=None,
+            kwargs={
+                'window_minutes': window_minutes,
+                'rate_limit_retries': rate_limit_retries + 1,
+            },
+        )
+    except (GitHubNetworkError, GitHubAPIError) as e:
+        transient_retries = self.request.retries
+        if transient_retries >= TRANSIENT_MAX_RETRIES:
+            logger.error(
+                "Max retries (%d) exceeded in reconcile_recent_repositories_task: %s",
+                TRANSIENT_MAX_RETRIES, str(e),
+            )
+            raise
+        countdown = 2 ** transient_retries
+        logger.warning(
+            "Transient failure in reconcile_recent_repositories_task (attempt %d/%d). Retrying in %ds: %s",
+            transient_retries + 1, TRANSIENT_MAX_RETRIES, countdown, str(e),
+        )
+        raise self.retry(
+            exc=e,
+            countdown=countdown,
+            max_retries=TRANSIENT_MAX_RETRIES,
+        )
+    except Exception as e:
+        logger.exception("Unexpected error in reconcile_recent_repositories_task")
+        raise
+
+
+@shared_task(
+    bind=True,
+    name='core.tasks.reconcile_all_repositories_nightly_task',
+    queue='sync',
+    max_retries=TRANSIENT_MAX_RETRIES,
+)
+def reconcile_all_repositories_nightly_task(
+    self,
+    rate_limit_retries: int = 0,
+) -> dict:
+    """
+    Scheduled Celery beat task to run full reconciliation across all tracked repositories nightly.
+    Runs once daily. Routed to low-priority 'sync' queue.
+    Rate-limit aware per PRD §13.6 and plan.md M4-T5.
+    """
+    from core.reconciliation import reconcile_all_repositories_nightly
+
+    client = GitHubClient()
+    try:
+        return reconcile_all_repositories_nightly(client=client)
+    except GitHubRateLimitError as e:
+        logger.warning(
+            "GitHub rate limit reached in reconcile_all_repositories_nightly_task (remaining: %s, reset: %s, retry_after: %s)",
+            e.remaining, e.reset_timestamp, e.retry_after,
+        )
+        delay = 60
+        if e.retry_after is not None and e.retry_after > 0:
+            delay = e.retry_after
+        elif e.reset_timestamp is not None:
+            now = int(time.time())
+            delay = max(e.reset_timestamp - now, 10)
+
+        raise self.retry(
+            exc=e,
+            countdown=delay,
+            max_retries=None,
+            kwargs={
+                'rate_limit_retries': rate_limit_retries + 1,
+            },
+        )
+    except (GitHubNetworkError, GitHubAPIError) as e:
+        transient_retries = self.request.retries
+        if transient_retries >= TRANSIENT_MAX_RETRIES:
+            logger.error(
+                "Max retries (%d) exceeded in reconcile_all_repositories_nightly_task: %s",
+                TRANSIENT_MAX_RETRIES, str(e),
+            )
+            raise
+        countdown = 2 ** transient_retries
+        logger.warning(
+            "Transient failure in reconcile_all_repositories_nightly_task (attempt %d/%d). Retrying in %ds: %s",
+            transient_retries + 1, TRANSIENT_MAX_RETRIES, countdown, str(e),
+        )
+        raise self.retry(
+            exc=e,
+            countdown=countdown,
+            max_retries=TRANSIENT_MAX_RETRIES,
+        )
+    except Exception as e:
+        logger.exception("Unexpected error in reconcile_all_repositories_nightly_task")
+        raise

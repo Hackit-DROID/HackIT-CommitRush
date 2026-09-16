@@ -948,3 +948,356 @@ class SubmissionsPausedTestCase(TestCase):
         self.assertFalse(fresh.validation_paused)
         self.assertTrue(fresh.leaderboard_frozen)
 
+
+class ReconciliationTestCase(TestCase):
+    """
+    Test suite for M4-T5: Reconciliation scaffold (PRD §13.4, §13.6, plan.md M4-T5).
+    Verifies:
+    - has_recent_webhook_activity window check
+    - reconcile_repository issue and PR synchronization
+    - Simulated missed PR webhook catch-up
+    - 15-minute scheduled reconciliation (skipping recent webhook repos)
+    - Nightly full reconciliation
+    - Celery task execution, rate-limit backoff, and retry handling
+    - submissions_paused respect during reconciliation
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='recon_user', password='password123')
+        self.participant = Participant.objects.create(
+            user=self.user,
+            github_id=9901,
+            github_username='recon_dev',
+        )
+        self.proj1 = Project.objects.create(
+            github_repo_id=6001,
+            owner='hackit',
+            name='recon-repo-1',
+            full_name='hackit/recon-repo-1',
+            is_enabled=True,
+        )
+        self.proj2 = Project.objects.create(
+            github_repo_id=6002,
+            owner='hackit',
+            name='recon-repo-2',
+            full_name='hackit/recon-repo-2',
+            is_enabled=True,
+        )
+        self.issue1 = Issue.objects.create(
+            github_issue_id=61001,
+            project=self.proj1,
+            number=10,
+            title='Tracked Issue #10 in Repo 1',
+            points=100,
+            status='open',
+        )
+        self.issue2 = Issue.objects.create(
+            github_issue_id=62001,
+            project=self.proj2,
+            number=20,
+            title='Tracked Issue #20 in Repo 2',
+            points=50,
+            status='open',
+        )
+
+    def test_m4_t5_has_recent_webhook_activity(self):
+        """Verifies detection of recent webhook activity within window."""
+        # Proj 1 has no webhooks
+        self.assertFalse(has_recent_webhook_activity(self.proj1, window_minutes=15))
+
+        # Create recent webhook for Proj 1 (processed 5 mins ago)
+        WebhookEvent.objects.create(
+            delivery_id='recent-wh-001',
+            event_type='pull_request',
+            payload={'repository': {'id': 6001, 'full_name': 'hackit/recon-repo-1'}},
+            processed_at=timezone.now() - timedelta(minutes=5),
+        )
+        self.assertTrue(has_recent_webhook_activity(self.proj1, window_minutes=15))
+
+        # For a 3-minute window, a 5-minute-old webhook is NOT recent
+        self.assertFalse(has_recent_webhook_activity(self.proj1, window_minutes=3))
+
+        # An unprocessed webhook (processed_at=None) is considered active
+        WebhookEvent.objects.create(
+            delivery_id='unprocessed-wh-002',
+            event_type='issues',
+            payload={'repository': {'id': 6002, 'full_name': 'hackit/recon-repo-2'}},
+            processed_at=None,
+        )
+        self.assertTrue(has_recent_webhook_activity(self.proj2, window_minutes=15))
+
+    def test_m4_t5_reconcile_repository_syncs_issues_and_prs(self):
+        """reconcile_repository fetches issues and PRs via client and synchronizes models."""
+        mock_client = MagicMock(spec=GitHubClient)
+        mock_client.get_issues.return_value = [
+            {
+                'id': 61001,
+                'number': 10,
+                'title': 'Tracked Issue #10 (Updated Title)',
+                'state': 'open',
+                'created_at': '2026-09-10T10:00:00Z',
+                'labels': [{'name': 'help wanted', 'color': '159818'}],
+            },
+            {
+                'id': 61002,
+                'number': 11,
+                'title': 'Brand New Discovered Issue #11',
+                'state': 'open',
+                'created_at': '2026-09-11T11:00:00Z',
+                'labels': [],
+            },
+        ]
+        mock_client.get_pull_requests.return_value = [
+            {
+                'id': 7001,
+                'number': 1,
+                'title': 'Fixes #10 - PR 1',
+                'state': 'open',
+                'user': {'id': 9901, 'login': 'recon_dev'},
+                'head': {'sha': 'sha-recon-pr-1', 'ref': 'feature-1'},
+                'merged': False,
+            },
+            {
+                'id': 7002,
+                'number': 2,
+                'title': 'Resolves #10 - PR 2 Merged',
+                'state': 'closed',
+                'user': {'id': 9901, 'login': 'recon_dev'},
+                'head': {'sha': 'sha-recon-pr-2', 'ref': 'feature-2'},
+                'merged': True,
+                'merged_at': '2026-09-12T12:00:00Z',
+            },
+        ]
+
+        result = reconcile_repository(self.proj1, client=mock_client)
+        self.assertEqual(result['status'], 'success')
+        self.assertEqual(result['issues_created'], 1)
+        self.assertEqual(result['issues_updated'], 1)
+        self.assertEqual(result['prs_reconciled'], 2)
+
+        # Verify Issue 10 updated and Issue 11 created
+        self.issue1.refresh_from_db()
+        self.assertEqual(self.issue1.title, 'Tracked Issue #10 (Updated Title)')
+        self.assertTrue(Issue.objects.filter(project=self.proj1, number=11).exists())
+
+        # Verify PR 1 created Contribution with PENDING
+        pr1 = PullRequest.objects.get(github_pr_id=7001)
+        contrib1 = Contribution.objects.get(pull_request=pr1)
+        self.assertEqual(contrib1.status, 'PENDING')
+        self.assertEqual(contrib1.participant, self.participant)
+
+        # Verify PR 2 transitioned to MERGED
+        pr2 = PullRequest.objects.get(github_pr_id=7002)
+        contrib2 = Contribution.objects.get(pull_request=pr2)
+        self.assertEqual(contrib2.status, 'MERGED')
+        self.assertTrue(pr2.merged)
+
+    def test_m4_t5_reconcile_catches_missed_webhook_event(self):
+        """Simulates a missed PR webhook delivery: reconciliation recovers the contribution."""
+        # Simulated scenario: Developer opened PR #5 resolving Issue #10 on GitHub, but webhook was dropped.
+        self.assertEqual(Contribution.objects.count(), 0)
+        self.assertEqual(PullRequest.objects.count(), 0)
+
+        mock_client = MagicMock(spec=GitHubClient)
+        mock_client.get_issues.return_value = []
+        mock_client.get_pull_requests.return_value = [
+            {
+                'id': 7005,
+                'number': 5,
+                'title': 'Closes #10 (Missed Webhook Delivery)',
+                'state': 'open',
+                'user': {'id': 9901, 'login': 'recon_dev'},
+                'head': {'sha': 'sha-missed-event', 'ref': 'patch-missed'},
+                'merged': False,
+            }
+        ]
+
+        result = reconcile_repository(self.proj1, client=mock_client)
+        self.assertEqual(result['status'], 'success')
+        self.assertEqual(result['pr_stats']['contribution_created'], 1)
+
+        # Contribution and PR are successfully recovered
+        pr = PullRequest.objects.get(github_pr_id=7005)
+        self.assertEqual(pr.number, 5)
+        contrib = Contribution.objects.get(pull_request=pr)
+        self.assertEqual(contrib.status, 'PENDING')
+        self.assertEqual(contrib.issue, self.issue1)
+        self.assertEqual(contrib.participant, self.participant)
+
+    def test_m4_t5_reconcile_recent_repositories_skips_active_and_syncs_quiet(self):
+        """reconcile_recent_repositories skips repos with recent webhooks and reconciles quiet repos."""
+        # Proj 1 has recent webhook activity
+        WebhookEvent.objects.create(
+            delivery_id='recent-proj1-wh',
+            event_type='pull_request',
+            payload={'repository': {'id': 6001, 'full_name': 'hackit/recon-repo-1'}},
+            processed_at=timezone.now() - timedelta(minutes=2),
+        )
+
+        mock_client = MagicMock(spec=GitHubClient)
+        mock_client.get_issues.return_value = []
+        mock_client.get_pull_requests.return_value = []
+
+        result = reconcile_recent_repositories(window_minutes=15, client=mock_client)
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['total_projects'], 2)
+        self.assertEqual(result['skipped_count'], 1)
+        self.assertEqual(result['reconciled_count'], 1)
+
+        skipped_ids = [item['project_id'] for item in result['skipped']]
+        reconciled_ids = [item['project_id'] for item in result['reconciled']]
+        self.assertIn(self.proj1.id, skipped_ids)
+        self.assertIn(self.proj2.id, reconciled_ids)
+
+    def test_m4_t5_reconcile_all_repositories_nightly(self):
+        """reconcile_all_repositories_nightly reconciles all enabled projects regardless of webhook history."""
+        # Even with recent webhook activity on Proj 1
+        WebhookEvent.objects.create(
+            delivery_id='nightly-recent-wh',
+            event_type='pull_request',
+            payload={'repository': {'id': 6001, 'full_name': 'hackit/recon-repo-1'}},
+            processed_at=timezone.now() - timedelta(minutes=1),
+        )
+
+        # Proj 2 is disabled
+        self.proj2.is_enabled = False
+        self.proj2.save(update_fields=['is_enabled'])
+
+        mock_client = MagicMock(spec=GitHubClient)
+        mock_client.get_issues.return_value = []
+        mock_client.get_pull_requests.return_value = []
+
+        result = reconcile_all_repositories_nightly(client=mock_client)
+        self.assertEqual(result['status'], 'completed')
+        self.assertEqual(result['total_projects'], 1)  # Only 1 enabled
+        self.assertEqual(result['reconciled_count'], 1)
+        self.assertEqual(result['reconciled'][0]['project_id'], self.proj1.id)
+
+    def test_m4_t5_celery_reconcile_recent_repositories_task_success(self):
+        """Celery task reconcile_recent_repositories_task runs to completion."""
+        with patch('core.reconciliation.reconcile_recent_repositories') as mock_recon:
+            mock_recon.return_value = {'status': 'completed', 'reconciled_count': 2}
+            res = reconcile_recent_repositories_task(window_minutes=15)
+            self.assertEqual(res['status'], 'completed')
+            mock_recon.assert_called_once()
+
+    def test_m4_t5_celery_reconcile_nightly_task_success(self):
+        """Celery task reconcile_all_repositories_nightly_task runs to completion."""
+        with patch('core.reconciliation.reconcile_all_repositories_nightly') as mock_recon:
+            mock_recon.return_value = {'status': 'completed', 'reconciled_count': 2}
+            res = reconcile_all_repositories_nightly_task()
+            self.assertEqual(res['status'], 'completed')
+            mock_recon.assert_called_once()
+
+    @patch('core.reconciliation.reconcile_recent_repositories')
+    @patch.object(reconcile_recent_repositories_task, 'retry')
+    def test_m4_t5_celery_task_rate_limit_backoff(self, mock_retry, mock_recon):
+        """Celery reconciliation task catches GitHubRateLimitError and backs off via retry."""
+        mock_retry.side_effect = Retry("Simulated retry")
+        mock_recon.side_effect = GitHubRateLimitError(
+            "Rate limited",
+            remaining=0,
+            limit=5000,
+            reset_timestamp=int(timezone.now().timestamp()) + 90,
+            retry_after=90,
+        )
+
+        with self.assertRaises(Retry):
+            reconcile_recent_repositories_task(window_minutes=15)
+
+        mock_retry.assert_called_once()
+        call_kwargs = mock_retry.call_args[1]
+        self.assertEqual(call_kwargs['countdown'], 90)
+        self.assertIsNone(call_kwargs['max_retries'])
+
+    @patch('core.reconciliation.reconcile_recent_repositories')
+    @patch.object(reconcile_recent_repositories_task, 'retry')
+    def test_m4_t5_celery_task_transient_error_exponential_backoff(self, mock_retry, mock_recon):
+        """Celery reconciliation task catches GitHubAPIError and uses exponential backoff."""
+        mock_retry.side_effect = Retry("Simulated retry")
+        mock_recon.side_effect = GitHubAPIError("GitHub 503 Service Unavailable")
+
+        reconcile_recent_repositories_task.push_request(retries=0)
+        try:
+            with self.assertRaises(Retry):
+                reconcile_recent_repositories_task(window_minutes=15)
+
+            mock_retry.assert_called_once()
+            call_kwargs = mock_retry.call_args[1]
+            self.assertEqual(call_kwargs['countdown'], 1)
+        finally:
+            reconcile_recent_repositories_task.pop_request()
+
+    @patch('core.reconciliation.reconcile_all_repositories_nightly')
+    @patch.object(reconcile_all_repositories_nightly_task, 'retry')
+    def test_m4_t5_celery_nightly_task_rate_limit_backoff(self, mock_retry, mock_recon):
+        """Celery nightly task catches GitHubRateLimitError and backs off via retry."""
+        mock_retry.side_effect = Retry("Simulated retry")
+        mock_recon.side_effect = GitHubRateLimitError(
+            "Rate limited",
+            remaining=0,
+            limit=5000,
+            reset_timestamp=int(timezone.now().timestamp()) + 120,
+            retry_after=120,
+        )
+
+        with self.assertRaises(Retry):
+            reconcile_all_repositories_nightly_task()
+
+        mock_retry.assert_called_once()
+        call_kwargs = mock_retry.call_args[1]
+        self.assertEqual(call_kwargs['countdown'], 120)
+        self.assertIsNone(call_kwargs['max_retries'])
+
+    @patch('core.reconciliation.reconcile_all_repositories_nightly')
+    @patch.object(reconcile_all_repositories_nightly_task, 'retry')
+    def test_m4_t5_celery_nightly_task_transient_error_backoff(self, mock_retry, mock_recon):
+        """Celery nightly task catches GitHubAPIError and uses exponential backoff."""
+        mock_retry.side_effect = Retry("Simulated retry")
+        mock_recon.side_effect = GitHubAPIError("GitHub 500 Server Error")
+
+        reconcile_all_repositories_nightly_task.push_request(retries=1)
+        try:
+            with self.assertRaises(Retry):
+                reconcile_all_repositories_nightly_task()
+
+            mock_retry.assert_called_once()
+            call_kwargs = mock_retry.call_args[1]
+            self.assertEqual(call_kwargs['countdown'], 2)
+        finally:
+            reconcile_all_repositories_nightly_task.pop_request()
+
+    def test_m4_t5_reconciliation_respects_submissions_paused(self):
+        """When submissions_paused=True, reconciliation caches PRs but creates NO Contribution rows."""
+        config = EventConfig.get_solo()
+        config.submissions_paused = True
+        config.save(update_fields=['submissions_paused'])
+
+        try:
+            mock_client = MagicMock(spec=GitHubClient)
+            mock_client.get_issues.return_value = []
+            mock_client.get_pull_requests.return_value = [
+                {
+                    'id': 7090,
+                    'number': 90,
+                    'title': 'Fixes #10 while submissions are paused',
+                    'state': 'open',
+                    'user': {'id': 9901, 'login': 'recon_dev'},
+                    'head': {'sha': 'sha-paused-recon', 'ref': 'patch-paused-recon'},
+                    'merged': False,
+                }
+            ]
+
+            result = reconcile_repository(self.proj1, client=mock_client)
+            self.assertEqual(result['status'], 'success')
+            self.assertEqual(result['pr_stats']['submissions_paused'], 1)
+
+            # PullRequest is cached
+            pr = PullRequest.objects.get(github_pr_id=7090)
+            self.assertEqual(pr.number, 90)
+
+            # NO Contribution was created
+            self.assertEqual(Contribution.objects.filter(pull_request=pr).count(), 0)
+        finally:
+            config.submissions_paused = False
+            config.save(update_fields=['submissions_paused'])
