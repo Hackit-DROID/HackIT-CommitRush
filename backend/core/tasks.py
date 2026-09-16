@@ -305,3 +305,56 @@ def reconcile_all_repositories_nightly_task(
     except Exception as e:
         logger.exception("Unexpected error in reconcile_all_repositories_nightly_task")
         raise
+
+
+@shared_task(
+    bind=True,
+    name='core.tasks.validate_contribution_task',
+    queue='validation',
+    max_retries=3,
+)
+def validate_contribution_task(self, contribution_id: int) -> dict:
+    """
+    Celery task to execute deterministic validation on a QUEUED Contribution (PRD §11, §12.1, §22, plan.md M5-T2).
+    Routed to the high-priority 'validation' queue.
+    """
+    from core.models import EventConfig
+    from core.validation import validate_contribution
+
+    config = EventConfig.get_solo()
+    if config.validation_paused:
+        logger.info("Validation pipeline paused; requeuing validate_contribution_task for Contribution %s", contribution_id)
+        raise self.retry(countdown=30, max_retries=None)
+
+    try:
+        return validate_contribution(contribution_id)
+    except Exception as e:
+        logger.exception("Error in validate_contribution_task for Contribution %s", contribution_id)
+        retries = self.request.retries
+        if retries < 3:
+            raise self.retry(exc=e, countdown=2 ** retries, max_retries=3)
+        return {
+            'status': 'failed',
+            'contribution_id': contribution_id,
+            'error': str(e),
+        }
+
+
+@shared_task(
+    bind=True,
+    name='core.tasks.requeue_stale_contributions_task',
+    queue='sync',
+    max_retries=3,
+)
+def requeue_stale_contributions_task(self, timeout_minutes: int | None = None) -> dict:
+    """
+    Periodic Celery beat task to sweep and recover crashed worker contributions (PRD §11.2, §12.4, plan.md M5-T3).
+    Reverts stale UNDER_REVIEW / MERGING contributions to their prior queued state.
+    """
+    from core.crash_recovery import requeue_stale_contributions
+
+    try:
+        return requeue_stale_contributions(timeout_minutes=timeout_minutes)
+    except Exception as e:
+        logger.exception("Error in requeue_stale_contributions_task")
+        raise

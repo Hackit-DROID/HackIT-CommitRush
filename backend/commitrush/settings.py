@@ -219,6 +219,10 @@ CELERY_TASK_QUEUES = {
         'exchange': 'webhooks',
         'routing_key': 'webhooks',
     },
+    'validation': {
+        'exchange': 'validation',
+        'routing_key': 'validation',
+    },
     'sync': {
         'exchange': 'sync',
         'routing_key': 'sync',
@@ -233,10 +237,13 @@ CELERY_TASK_ROUTES = {
     'core.tasks.process_webhook_event_task': {'queue': 'webhooks'},
     'core.tasks.reconcile_recent_repositories_task': {'queue': 'sync'},
     'core.tasks.reconcile_all_repositories_nightly_task': {'queue': 'sync'},
+    'core.tasks.validate_contribution_task': {'queue': 'validation'},
+    'core.tasks.requeue_stale_contributions_task': {'queue': 'sync'},
 }
 
-# Reconciliation Configuration (PRD §13.4, plan.md M4-T5)
+# Reconciliation & Worker Configuration (PRD §11.2, §12.4, §13.4, plan.md M4-T5, M5-T3)
 RECONCILIATION_RECENT_WINDOW_MINUTES = int(os.environ.get('RECONCILIATION_RECENT_WINDOW_MINUTES', '15'))
+WORKER_LOCK_TIMEOUT_MINUTES = int(os.environ.get('WORKER_LOCK_TIMEOUT_MINUTES', '10'))
 
 CELERY_BEAT_SCHEDULE = {
     'reconcile-recent-repositories-15min': {
@@ -246,5 +253,9 @@ CELERY_BEAT_SCHEDULE = {
     'reconcile-all-repositories-nightly': {
         'task': 'core.tasks.reconcile_all_repositories_nightly_task',
         'schedule': float(os.environ.get('RECONCILIATION_NIGHTLY_SECONDS', 24 * 60 * 60)),  # Daily / nightly by default
+    },
+    'requeue-stale-contributions-5min': {
+        'task': 'core.tasks.requeue_stale_contributions_task',
+        'schedule': float(os.environ.get('RECOVERY_SWEEP_SECONDS', 5 * 60)),  # Every 5 minutes by default
     },
 }
