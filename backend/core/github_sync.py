@@ -675,6 +675,11 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
     raw_created_at = issue_data.get('created_at')
     parsed_created_at = parse_datetime(raw_created_at) if raw_created_at else None
 
+    user_data = issue_data.get('user')
+    created_by_github_id = None
+    if isinstance(user_data, dict):
+        created_by_github_id = user_data.get('id')
+
     with transaction.atomic():
         issue = Issue.objects.select_for_update().filter(github_issue_id=github_issue_id).first()
 
@@ -695,6 +700,9 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
             if parsed_created_at and issue.created_at != parsed_created_at:
                 issue.created_at = parsed_created_at
                 updated_fields.append('created_at')
+            if created_by_github_id is not None and issue.created_by_github_id != created_by_github_id:
+                issue.created_by_github_id = created_by_github_id
+                updated_fields.append('created_by_github_id')
 
             if updated_fields:
                 issue.save(update_fields=updated_fields)
@@ -715,6 +723,8 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
                 }
                 if parsed_created_at:
                     create_kwargs['created_at'] = parsed_created_at
+                if created_by_github_id is not None:
+                    create_kwargs['created_by_github_id'] = created_by_github_id
 
                 issue = Issue.objects.create(**create_kwargs)
                 created = True
@@ -738,6 +748,9 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
                     if parsed_created_at and issue.created_at != parsed_created_at:
                         issue.created_at = parsed_created_at
                         updated_fields.append('created_at')
+                    if created_by_github_id is not None and issue.created_by_github_id != created_by_github_id:
+                        issue.created_by_github_id = created_by_github_id
+                        updated_fields.append('created_by_github_id')
 
                     if updated_fields:
                         issue.save(update_fields=updated_fields)

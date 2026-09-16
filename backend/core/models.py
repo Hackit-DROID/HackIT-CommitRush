@@ -175,6 +175,11 @@ class Issue(models.Model):
         default=timezone.now,
         help_text='Issue creation timestamp',
     )
+    created_by_github_id = models.BigIntegerField(
+        null=True,
+        blank=True,
+        help_text='GitHub user ID of the issue creator (PRD §22)',
+    )
 
     class Meta:
         indexes = [
