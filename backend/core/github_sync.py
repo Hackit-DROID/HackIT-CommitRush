@@ -2,7 +2,7 @@ import logging
 import re
 import requests
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from core.models import Issue, IssueLabel, Project
 
@@ -33,8 +33,23 @@ class GitHubAuthenticationError(GitHubSyncError):
 
 
 class GitHubRateLimitError(GitHubSyncError):
-    """Raised when GitHub API rate limits are exceeded (HTTP 403 rate limit / 429)."""
-    pass
+    """
+    Raised when GitHub API rate limits are exceeded (HTTP 403 rate limit / 429)
+    or remaining quota drops below the 10% safety threshold (PRD §13.6, M2-T4).
+    """
+    def __init__(
+        self,
+        message: str = "GitHub API rate limit exceeded.",
+        remaining: int | None = None,
+        limit: int | None = None,
+        reset_timestamp: int | None = None,
+        retry_after: int | None = None,
+    ):
+        super().__init__(message)
+        self.remaining = remaining
+        self.limit = limit
+        self.reset_timestamp = reset_timestamp
+        self.retry_after = retry_after
 
 
 class GitHubAPIError(GitHubSyncError):
@@ -77,7 +92,7 @@ def parse_repo_identifier(repo_identifier: str) -> tuple[str, str]:
 class GitHubClient:
     """
     Authenticated GitHub REST API client for read-side synchronization.
-    Handles headers, timeouts, error status mapping, and ensures secrets are not leaked.
+    Handles headers, timeouts, error status mapping, rate-limit inspection, and ensures secrets are not leaked.
     """
 
     def __init__(
@@ -90,6 +105,12 @@ class GitHubClient:
         self.timeout = timeout
         self.base_url = base_url.rstrip('/')
         self.session = requests.Session()
+        self.last_rate_limit: dict[str, int | None] = {
+            'remaining': None,
+            'limit': None,
+            'reset': None,
+            'retry_after': None,
+        }
 
     def _get_headers(self) -> dict[str, str]:
         headers = {
@@ -99,6 +120,33 @@ class GitHubClient:
         if self.token:
             headers['Authorization'] = f'Bearer {self.token}'
         return headers
+
+    def _record_rate_limit(self, response: requests.Response) -> dict[str, int | None]:
+        remaining_str = response.headers.get('X-RateLimit-Remaining')
+        limit_str = response.headers.get('X-RateLimit-Limit')
+        reset_str = response.headers.get('X-RateLimit-Reset')
+        retry_after_str = response.headers.get('Retry-After')
+
+        remaining = int(remaining_str) if remaining_str is not None and remaining_str.isdigit() else None
+        limit = int(limit_str) if limit_str is not None and limit_str.isdigit() else None
+        reset = int(reset_str) if reset_str is not None and reset_str.isdigit() else None
+        retry_after = int(retry_after_str) if retry_after_str is not None and retry_after_str.isdigit() else None
+
+        self.last_rate_limit = {
+            'remaining': remaining,
+            'limit': limit,
+            'reset': reset,
+            'retry_after': retry_after,
+        }
+        return self.last_rate_limit
+
+    def is_low_quota(self, threshold: float = 0.10) -> bool:
+        """Returns True if remaining quota is below the threshold percentage (default 10%)."""
+        rem = self.last_rate_limit.get('remaining')
+        lim = self.last_rate_limit.get('limit')
+        if rem is not None and lim is not None and lim > 0:
+            return (rem / lim) < threshold
+        return False
 
     def get_repository(self, owner: str, repo: str) -> dict:
         """
@@ -123,6 +171,8 @@ class GitHubClient:
         except requests.RequestException as e:
             logger.warning("GitHub API network failure for repository %s/%s", owner, repo)
             raise GitHubNetworkError("Failed to communicate with GitHub REST API.") from e
+
+        self._record_rate_limit(response)
 
         if response.status_code == 200:
             try:
@@ -151,13 +201,25 @@ class GitHubClient:
             rate_remaining = response.headers.get('X-RateLimit-Remaining')
             if rate_remaining == '0':
                 logger.warning("GitHub API rate limit reached (HTTP 403)")
-                raise GitHubRateLimitError("GitHub API rate limit exceeded (HTTP 403).")
+                raise GitHubRateLimitError(
+                    "GitHub API rate limit exceeded (HTTP 403).",
+                    remaining=0,
+                    limit=self.last_rate_limit.get('limit'),
+                    reset_timestamp=self.last_rate_limit.get('reset'),
+                    retry_after=self.last_rate_limit.get('retry_after'),
+                )
             logger.warning("GitHub API permission denied or rate limited (HTTP 403) for %s/%s", owner, repo)
             raise GitHubAuthenticationError(f"GitHub API permission denied or rate limited (HTTP 403) for '{owner}/{repo}'.")
 
         if response.status_code == 429:
             logger.warning("GitHub API rate limit reached (HTTP 429)")
-            raise GitHubRateLimitError("GitHub API rate limit reached (HTTP 429).")
+            raise GitHubRateLimitError(
+                "GitHub API rate limit reached (HTTP 429).",
+                remaining=self.last_rate_limit.get('remaining'),
+                limit=self.last_rate_limit.get('limit'),
+                reset_timestamp=self.last_rate_limit.get('reset'),
+                retry_after=self.last_rate_limit.get('retry_after'),
+            )
 
         if response.status_code >= 500:
             logger.warning("GitHub API server error HTTP %s for %s/%s", response.status_code, owner, repo)
@@ -170,6 +232,7 @@ class GitHubClient:
         """
         Fetch all issues for repository from GET /repos/{owner}/{repo}/issues.
         Handles multi-page pagination. Filters out pull requests.
+        Inspects rate-limit headers across pages and raises GitHubRateLimitError if quota falls below 10%.
         """
         if not owner or not repo:
             raise ValueError("Owner and repository name must be non-empty.")
@@ -199,6 +262,8 @@ class GitHubClient:
                 logger.warning("GitHub API network failure fetching issues for %s/%s", owner, repo)
                 raise GitHubNetworkError("Failed to communicate with GitHub REST API.") from e
 
+            self._record_rate_limit(response)
+
             if response.status_code == 200:
                 try:
                     data = response.json()
@@ -216,6 +281,23 @@ class GitHubClient:
                         continue
                     if 'id' in item and 'number' in item:
                         all_issues.append(item)
+
+                # Low-quota safety check across pages (PRD §13.6, M2-T4)
+                if self.is_low_quota(threshold=0.10):
+                    logger.warning(
+                        "GitHub API rate limit quota dropped below 10%% (%s/%s) fetching issues for %s/%s",
+                        self.last_rate_limit.get('remaining'),
+                        self.last_rate_limit.get('limit'),
+                        owner,
+                        repo,
+                    )
+                    raise GitHubRateLimitError(
+                        "GitHub API quota dropped below 10% safety threshold.",
+                        remaining=self.last_rate_limit.get('remaining'),
+                        limit=self.last_rate_limit.get('limit'),
+                        reset_timestamp=self.last_rate_limit.get('reset'),
+                        retry_after=self.last_rate_limit.get('retry_after'),
+                    )
 
                 # Check Link header for rel="next"
                 next_url = None
@@ -250,13 +332,25 @@ class GitHubClient:
                 rate_remaining = response.headers.get('X-RateLimit-Remaining')
                 if rate_remaining == '0':
                     logger.warning("GitHub API rate limit reached (HTTP 403)")
-                    raise GitHubRateLimitError("GitHub API rate limit exceeded (HTTP 403).")
+                    raise GitHubRateLimitError(
+                        "GitHub API rate limit exceeded (HTTP 403).",
+                        remaining=0,
+                        limit=self.last_rate_limit.get('limit'),
+                        reset_timestamp=self.last_rate_limit.get('reset'),
+                        retry_after=self.last_rate_limit.get('retry_after'),
+                    )
                 logger.warning("GitHub API permission denied or rate limited (HTTP 403) for %s/%s", owner, repo)
                 raise GitHubAuthenticationError(f"GitHub API permission denied or rate limited (HTTP 403) for '{owner}/{repo}'.")
 
             if response.status_code == 429:
                 logger.warning("GitHub API rate limit reached (HTTP 429)")
-                raise GitHubRateLimitError("GitHub API rate limit reached (HTTP 429).")
+                raise GitHubRateLimitError(
+                    "GitHub API rate limit reached (HTTP 429).",
+                    remaining=self.last_rate_limit.get('remaining'),
+                    limit=self.last_rate_limit.get('limit'),
+                    reset_timestamp=self.last_rate_limit.get('reset'),
+                    retry_after=self.last_rate_limit.get('retry_after'),
+                )
 
             if response.status_code >= 500:
                 logger.warning("GitHub API server error HTTP %s fetching issues for %s/%s", response.status_code, owner, repo)
@@ -271,6 +365,7 @@ class GitHubClient:
 def sync_project(repo_data: dict) -> tuple[Project, bool]:
     """
     Synchronize repository metadata into the Project model.
+    Handles concurrent first-time creation races safely.
     
     Mapping rules:
     - github_repo_id: repo_data['id'] (immutable unique key)
@@ -333,21 +428,51 @@ def sync_project(repo_data: dict) -> tuple[Project, bool]:
 
             return project, False
 
-        project = Project.objects.create(
-            github_repo_id=github_repo_id,
-            owner=owner,
-            name=name,
-            full_name=full_name,
-            language=language,
-            description=description,
-        )
-        return project, True
+    try:
+        with transaction.atomic():
+            project = Project.objects.create(
+                github_repo_id=github_repo_id,
+                owner=owner,
+                name=name,
+                full_name=full_name,
+                language=language,
+                description=description,
+            )
+            return project, True
+    except IntegrityError:
+        # Concurrent worker created the row first; re-select with row lock and update
+        with transaction.atomic():
+            project = Project.objects.select_for_update().filter(github_repo_id=github_repo_id).first()
+            if project:
+                updated_fields = []
+                if project.owner != owner:
+                    project.owner = owner
+                    updated_fields.append('owner')
+                if project.name != name:
+                    project.name = name
+                    updated_fields.append('name')
+                if project.full_name != full_name:
+                    project.full_name = full_name
+                    updated_fields.append('full_name')
+                if project.language != language:
+                    project.language = language
+                    updated_fields.append('language')
+                if project.description != description:
+                    project.description = description
+                    updated_fields.append('description')
+
+                if updated_fields:
+                    project.save(update_fields=updated_fields)
+
+                return project, False
+            raise
 
 
 def sync_label(label_data: dict | str) -> tuple[IssueLabel | None, bool]:
     """
     Synchronize a single GitHub label into the IssueLabel model.
     Handles dict payloads ({'name': '...', 'color': '...'}) and string names.
+    Handles concurrent first-time creation races safely.
     
     Mapping rules:
     - name: label name (globally unique per schema, stripped, max 255 chars)
@@ -378,16 +503,25 @@ def sync_label(label_data: dict | str) -> tuple[IssueLabel | None, bool]:
                 label.save(update_fields=['color'])
             return label, False
 
-        label, created = IssueLabel.objects.get_or_create(
-            name=name,
-            defaults={'color': color},
-        )
-        return label, created
+    try:
+        with transaction.atomic():
+            label = IssueLabel.objects.create(name=name, color=color)
+            return label, True
+    except IntegrityError:
+        with transaction.atomic():
+            label = IssueLabel.objects.select_for_update().filter(name=name).first()
+            if label:
+                if color and label.color != color:
+                    label.color = color
+                    label.save(update_fields=['color'])
+                return label, False
+            raise
 
 
 def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
     """
     Synchronize issue metadata into the Issue model and synchronize its labels (M2-T2, M2-T3).
+    Handles concurrent first-time creation races safely.
     
     Mapping rules:
     - github_issue_id: issue_data['id'] (immutable unique key)
@@ -444,26 +578,55 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
 
             created = False
         else:
-            issue = Issue.objects.create(
-                github_issue_id=github_issue_id,
-                project=project,
-                number=number,
-                title=title,
-                status=status,
-            )
-            created = True
+            issue = None
 
-        if 'labels' in issue_data:
-            raw_labels = issue_data.get('labels') or []
-            if isinstance(raw_labels, list):
-                label_objects = []
-                for item in raw_labels:
-                    label_obj, _ = sync_label(item)
-                    if label_obj is not None:
-                        label_objects.append(label_obj)
-                issue.labels.set(label_objects)
+    if issue is None:
+        try:
+            with transaction.atomic():
+                issue = Issue.objects.create(
+                    github_issue_id=github_issue_id,
+                    project=project,
+                    number=number,
+                    title=title,
+                    status=status,
+                )
+                created = True
+        except IntegrityError:
+            with transaction.atomic():
+                issue = Issue.objects.select_for_update().filter(github_issue_id=github_issue_id).first()
+                if issue:
+                    updated_fields = []
+                    if issue.project_id != project.id:
+                        issue.project = project
+                        updated_fields.append('project')
+                    if issue.number != number:
+                        issue.number = number
+                        updated_fields.append('number')
+                    if issue.title != title:
+                        issue.title = title
+                        updated_fields.append('title')
+                    if issue.status != status:
+                        issue.status = status
+                        updated_fields.append('status')
 
-        return issue, created
+                    if updated_fields:
+                        issue.save(update_fields=updated_fields)
+
+                    created = False
+                else:
+                    raise
+
+    if 'labels' in issue_data:
+        raw_labels = issue_data.get('labels') or []
+        if isinstance(raw_labels, list):
+            label_objects = []
+            for item in raw_labels:
+                label_obj, _ = sync_label(item)
+                if label_obj is not None:
+                    label_objects.append(label_obj)
+            issue.labels.set(label_objects)
+
+    return issue, created
 
 
 def sync_issues_for_project(project: Project, issues_data: list[dict]) -> tuple[int, int]:

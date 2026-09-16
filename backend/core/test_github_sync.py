@@ -337,15 +337,55 @@ class GitHubClientTestCase(TestCase):
             self.client.get_issues('hackit', 'awesome-project')
 
     @patch('core.github_sync.requests.Session.get')
-    def test_get_issues_malformed_response_not_list(self, mock_get):
+    def test_get_issues_low_quota_below_10_percent_raises_rate_limit_error(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.headers = {}
-        mock_resp.json.return_value = {'message': 'not a list'}
+        mock_resp.headers = {
+            'X-RateLimit-Remaining': '400',
+            'X-RateLimit-Limit': '5000',
+            'X-RateLimit-Reset': '1789518000',
+        }
+        mock_resp.json.return_value = [SAMPLE_ISSUE_PAYLOAD_1]
         mock_get.return_value = mock_resp
 
-        with self.assertRaises(GitHubDataError):
+        with self.assertRaises(GitHubRateLimitError) as ctx:
             self.client.get_issues('hackit', 'awesome-project')
+
+        exc = ctx.exception
+        self.assertEqual(exc.remaining, 400)
+        self.assertEqual(exc.limit, 5000)
+        self.assertEqual(exc.reset_timestamp, 1789518000)
+        self.assertIn("10%", str(exc))
+
+    @patch('core.github_sync.requests.Session.get')
+    def test_get_issues_pagination_quota_drop_on_second_page(self, mock_get):
+        resp_page1 = MagicMock()
+        resp_page1.status_code = 200
+        resp_page1.headers = {
+            'Link': '<https://api.github.com/repos/hackit/awesome-project/issues?page=2>; rel="next"',
+            'X-RateLimit-Remaining': '2500',
+            'X-RateLimit-Limit': '5000',
+        }
+        resp_page1.json.return_value = [SAMPLE_ISSUE_PAYLOAD_1]
+
+        resp_page2 = MagicMock()
+        resp_page2.status_code = 200
+        resp_page2.headers = {
+            'X-RateLimit-Remaining': '300',
+            'X-RateLimit-Limit': '5000',
+            'X-RateLimit-Reset': '1789518100',
+        }
+        resp_page2.json.return_value = [SAMPLE_ISSUE_PAYLOAD_2]
+
+        mock_get.side_effect = [resp_page1, resp_page2]
+
+        with self.assertRaises(GitHubRateLimitError) as ctx:
+            self.client.get_issues('hackit', 'awesome-project')
+
+        exc = ctx.exception
+        self.assertEqual(exc.remaining, 300)
+        self.assertEqual(exc.limit, 5000)
+        self.assertEqual(exc.reset_timestamp, 1789518100)
 
 
 class SyncProjectTestCase(TestCase):

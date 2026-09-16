@@ -193,3 +193,27 @@ CSRF_TRUSTED_ORIGINS = [
     ).split(',')
     if origin.strip()
 ]
+
+# Celery Configuration (PRD §10.1, §13.6, plan.md M2-T4)
+# Redis is the broker and result backend. Configuration is backed by environment variables.
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+CELERY_ENABLE_UTC = True
+CELERY_TASK_DEFAULT_QUEUE = 'default'
+CELERY_TASK_QUEUES = {
+    'sync': {
+        'exchange': 'sync',
+        'routing_key': 'sync',
+    },
+    'default': {
+        'exchange': 'default',
+        'routing_key': 'default',
+    },
+}
+CELERY_TASK_ROUTES = {
+    'core.tasks.sync_repository_task': {'queue': 'sync'},
+}
