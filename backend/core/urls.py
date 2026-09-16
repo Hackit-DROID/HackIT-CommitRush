@@ -1,7 +1,9 @@
 from django.urls import path
 from core.api_views import (
+    ContributionDetailView,
     IssueDetailView,
     IssueListView,
+    MyContributionsListView,
     ProjectDetailView,
     ProjectListView,
 )
@@ -27,4 +29,7 @@ urlpatterns = [
     path('issues/<int:pk>/', IssueDetailView.as_view(), name='issue-detail'),
     # M4 GitHub Webhook Receiver (PRD §13.2, §16, Plan M4-T1)
     path('webhooks/github/', github_webhook_view, name='github-webhook'),
+    # M5 Contribution Status APIs (PRD §16, Plan M5-T4)
+    path('contributions/mine/', MyContributionsListView.as_view(), name='my-contributions-list'),
+    path('contributions/<int:pk>/', ContributionDetailView.as_view(), name='contribution-detail'),
 ]

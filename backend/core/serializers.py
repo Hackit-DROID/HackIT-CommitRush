@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from core.models import Project, Issue, IssueLabel, Contribution
+from core.models import Project, Issue, IssueLabel, Contribution, Participant, PullRequest
 
 
 class ProjectListSerializer(serializers.ModelSerializer):
@@ -140,3 +140,100 @@ class IssueDetailSerializer(serializers.ModelSerializer):
 
     def get_github_url(self, obj: Issue) -> str:
         return f"https://github.com/{obj.project.full_name}/issues/{obj.number}"
+
+
+class ContributionParticipantSerializer(serializers.ModelSerializer):
+    """
+    Nested serializer for participant info on contributions.
+    """
+    class Meta:
+        model = Participant
+        fields = [
+            'id',
+            'github_id',
+            'github_username',
+            'avatar_url',
+        ]
+        read_only_fields = fields
+
+
+class ContributionIssueSerializer(serializers.ModelSerializer):
+    """
+    Nested serializer for issue info on contributions.
+    """
+    project = serializers.CharField(source='project.full_name', read_only=True)
+    github_number = serializers.IntegerField(source='number', read_only=True)
+    github_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Issue
+        fields = [
+            'id',
+            'github_issue_id',
+            'title',
+            'project',
+            'github_number',
+            'points',
+            'difficulty',
+            'category',
+            'status',
+            'github_url',
+        ]
+        read_only_fields = fields
+
+    def get_github_url(self, obj: Issue) -> str:
+        return f"https://github.com/{obj.project.full_name}/issues/{obj.number}"
+
+
+class ContributionPullRequestSerializer(serializers.ModelSerializer):
+    """
+    Nested serializer for pull request info on contributions.
+    """
+    repo = serializers.CharField(source='repo.full_name', read_only=True)
+    github_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PullRequest
+        fields = [
+            'id',
+            'github_pr_id',
+            'number',
+            'repo',
+            'merged',
+            'merged_at',
+            'head_sha',
+            'github_url',
+        ]
+        read_only_fields = fields
+
+    def get_github_url(self, obj: PullRequest) -> str:
+        return f"https://github.com/{obj.repo.full_name}/pull/{obj.number}"
+
+
+class ContributionSerializer(serializers.ModelSerializer):
+    """
+    Serializer for Contribution detail and list views (PRD §16, Plan M5-T4).
+    Includes nested participant, issue, and pull request information,
+    state machine statuses, and retry/audit timestamps.
+    """
+    participant = ContributionParticipantSerializer(read_only=True)
+    issue = ContributionIssueSerializer(read_only=True)
+    pull_request = ContributionPullRequestSerializer(read_only=True)
+
+    class Meta:
+        model = Contribution
+        fields = [
+            'id',
+            'participant',
+            'issue',
+            'pull_request',
+            'status',
+            'sub_status',
+            'retry_count',
+            'flagged_reason',
+            'approved_at',
+            'merged_at',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields

@@ -6,8 +6,9 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
-from core.models import Issue, Project
+from core.models import Contribution, Issue, Project
 from core.serializers import (
+    ContributionSerializer,
     IssueDetailSerializer,
     IssueListSerializer,
     ProjectDetailSerializer,
@@ -353,4 +354,84 @@ class IssueDetailView(generics.RetrieveAPIView):
     throttle_classes = []
     serializer_class = IssueDetailSerializer
     queryset = Issue.objects.select_related('project').prefetch_related('labels')
+    lookup_field = 'pk'
+
+
+# =============================================================================
+# Contribution Status APIs (PRD §16, §19, Plan M5-T4)
+# =============================================================================
+
+class IsOwnerOrAdmin(permissions.BasePermission):
+    """
+    Object-level permission allowing only the contribution owner or admin/staff to view.
+    PRD §16, §19, Plan M5-T4.
+    """
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        if request.user.is_staff or request.user.is_superuser:
+            return True
+        return hasattr(obj, 'participant') and obj.participant is not None and obj.participant.user_id == request.user.id
+
+
+class ContributionPagination(PageNumberPagination):
+    """
+    Pagination for contribution listings.
+    Default page size: 20, max page size: 100.
+    """
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class MyContributionsListView(generics.ListAPIView):
+    """
+    M5-T4: GET /api/v1/contributions/mine/
+    Returns the authenticated participant's contribution history and statuses (PRD §16).
+    Enforces object-level isolation (participant.user == request.user).
+    Zero synchronous calls to GitHub.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ContributionSerializer
+    pagination_class = ContributionPagination
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return Contribution.objects.none()
+
+        queryset = Contribution.objects.filter(
+            participant__user=user
+        ).select_related(
+            'participant',
+            'issue__project',
+            'pull_request__repo',
+        )
+
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            clean_status = status_param.strip().upper()
+            if clean_status:
+                queryset = queryset.filter(status=clean_status)
+
+        return queryset.order_by('-created_at', '-id')
+
+
+class ContributionDetailView(generics.RetrieveAPIView):
+    """
+    M5-T4: GET /api/v1/contributions/{id}/
+    Returns detailed status for a single contribution (PRD §16).
+    Restricted to the contribution owner or admin/staff.
+    Zero synchronous calls to GitHub.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin]
+    serializer_class = ContributionSerializer
+    queryset = Contribution.objects.select_related(
+        'participant',
+        'issue__project',
+        'pull_request__repo',
+    )
     lookup_field = 'pk'
