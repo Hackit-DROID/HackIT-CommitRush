@@ -71,6 +71,69 @@ export interface IssueFilters {
   page_size?: number;
 }
 
+export type ContributionStatus =
+  | 'PENDING'
+  | 'QUEUED'
+  | 'UNDER_REVIEW'
+  | 'APPROVED'
+  | 'MERGING'
+  | 'MERGED'
+  | 'REJECTED'
+  | 'FLAGGED'
+  | 'RETRY';
+
+export interface ContributionParticipant {
+  id: number;
+  github_id: number;
+  github_username: string;
+  avatar_url: string;
+}
+
+export interface ContributionIssue {
+  id: number;
+  github_issue_id: number;
+  title: string;
+  project: string;
+  github_number: number;
+  points: number;
+  difficulty: string;
+  category: string;
+  status: string;
+  github_url: string;
+}
+
+export interface ContributionPullRequest {
+  id: number;
+  github_pr_id: number;
+  number: number;
+  repo: string;
+  merged: boolean;
+  merged_at: string | null;
+  head_sha: string;
+  github_url: string;
+}
+
+export interface Contribution {
+  id: number;
+  participant: ContributionParticipant;
+  issue: ContributionIssue;
+  pull_request: ContributionPullRequest;
+  status: ContributionStatus | string;
+  sub_status: string;
+  retry_count: number;
+  flagged_reason: string;
+  approved_at: string | null;
+  merged_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContributionFilters {
+  status?: string;
+  page?: number;
+  page_size?: number;
+}
+
 export class ApiError extends Error {
   status: number;
   data: unknown;

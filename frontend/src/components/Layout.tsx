@@ -13,6 +13,7 @@ export function Layout({ children }: LayoutProps) {
     location.pathname.startsWith('/issues');
 
   const isProjectsActive = location.pathname.startsWith('/projects');
+  const isContributionsActive = location.pathname.startsWith('/contributions');
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-cyan-500 selection:text-white">
@@ -52,6 +53,16 @@ export function Layout({ children }: LayoutProps) {
                 }`}
               >
                 Projects
+              </Link>
+              <Link
+                to="/contributions"
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                  isContributionsActive
+                    ? 'bg-slate-800 text-cyan-400 border border-slate-700/60 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                }`}
+              >
+                My Contributions
               </Link>
             </nav>
           </div>

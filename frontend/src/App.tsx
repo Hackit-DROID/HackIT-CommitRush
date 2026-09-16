@@ -5,6 +5,8 @@ import { IssuesExplorerPage } from './pages/IssuesExplorerPage';
 import { IssueDetailPage } from './pages/IssueDetailPage';
 import { ProjectsExplorerPage } from './pages/ProjectsExplorerPage';
 import { ProjectDetailPage } from './pages/ProjectDetailPage';
+import { MyContributionsPage } from './pages/MyContributionsPage';
+import { ContributionDetailPage } from './pages/ContributionDetailPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,6 +29,8 @@ export function App() {
             <Route path="/projects" element={<ProjectsExplorerPage />} />
             <Route path="/projects/:slug" element={<ProjectDetailPage />} />
             <Route path="/projects/*" element={<ProjectDetailPage />} />
+            <Route path="/contributions" element={<MyContributionsPage />} />
+            <Route path="/contributions/:id" element={<ContributionDetailPage />} />
             <Route path="*" element={<Navigate to="/issues" replace />} />
           </Routes>
         </Layout>
