@@ -2,6 +2,7 @@ from django.conf import settings
 from django.db import IntegrityError, models
 from django.db.models.signals import pre_delete
 from django.dispatch import receiver
+from django.utils import timezone
 
 
 class Participant(models.Model):
@@ -170,12 +171,17 @@ class Issue(models.Model):
         related_name='issues',
         help_text='Cached GitHub issue labels',
     )
+    created_at = models.DateTimeField(
+        default=timezone.now,
+        help_text='Issue creation timestamp',
+    )
 
     class Meta:
         indexes = [
             models.Index(fields=['project', 'status'], name='issue_project_status_idx'),
             models.Index(fields=['points'], name='issue_points_idx'),
             models.Index(fields=['difficulty'], name='issue_difficulty_idx'),
+            models.Index(fields=['-created_at'], name='issue_created_at_idx'),
         ]
 
     def __str__(self):

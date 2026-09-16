@@ -3,6 +3,7 @@ import re
 import requests
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.utils.dateparse import parse_datetime
 
 from core.models import Issue, IssueLabel, Project
 
@@ -555,6 +556,9 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
     github_state = (issue_data.get('state') or 'open').lower()
     status = 'closed' if github_state == 'closed' else 'open'
 
+    raw_created_at = issue_data.get('created_at')
+    parsed_created_at = parse_datetime(raw_created_at) if raw_created_at else None
+
     with transaction.atomic():
         issue = Issue.objects.select_for_update().filter(github_issue_id=github_issue_id).first()
 
@@ -572,6 +576,9 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
             if issue.status != status:
                 issue.status = status
                 updated_fields.append('status')
+            if parsed_created_at and issue.created_at != parsed_created_at:
+                issue.created_at = parsed_created_at
+                updated_fields.append('created_at')
 
             if updated_fields:
                 issue.save(update_fields=updated_fields)
@@ -583,13 +590,17 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
     if issue is None:
         try:
             with transaction.atomic():
-                issue = Issue.objects.create(
-                    github_issue_id=github_issue_id,
-                    project=project,
-                    number=number,
-                    title=title,
-                    status=status,
-                )
+                create_kwargs = {
+                    'github_issue_id': github_issue_id,
+                    'project': project,
+                    'number': number,
+                    'title': title,
+                    'status': status,
+                }
+                if parsed_created_at:
+                    create_kwargs['created_at'] = parsed_created_at
+
+                issue = Issue.objects.create(**create_kwargs)
                 created = True
         except IntegrityError:
             with transaction.atomic():
@@ -608,6 +619,9 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
                     if issue.status != status:
                         issue.status = status
                         updated_fields.append('status')
+                    if parsed_created_at and issue.created_at != parsed_created_at:
+                        issue.created_at = parsed_created_at
+                        updated_fields.append('created_at')
 
                     if updated_fields:
                         issue.save(update_fields=updated_fields)

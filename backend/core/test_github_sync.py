@@ -626,6 +626,22 @@ class SyncIssueTestCase(TestCase):
         self.assertEqual(issue.category, 'security')
         self.assertTrue(issue.is_featured)
 
+    def test_sync_issue_parses_and_persists_created_at(self):
+        payload_with_timestamp = {
+            'id': 100099,
+            'number': 99,
+            'title': 'Issue with specific creation timestamp',
+            'state': 'open',
+            'created_at': '2026-08-15T14:30:00Z',
+        }
+        issue, created = sync_issue(self.project, payload_with_timestamp)
+        self.assertTrue(created)
+        self.assertEqual(issue.created_at.year, 2026)
+        self.assertEqual(issue.created_at.month, 8)
+        self.assertEqual(issue.created_at.day, 15)
+        self.assertEqual(issue.created_at.hour, 14)
+        self.assertEqual(issue.created_at.minute, 30)
+
     def test_sync_issue_missing_required_fields_raises_error(self):
         with self.assertRaises(GitHubDataError):
             sync_issue(self.project, {'number': 42, 'title': 'No ID'})
