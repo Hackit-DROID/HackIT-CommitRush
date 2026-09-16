@@ -7,6 +7,7 @@ from django.utils.dateparse import parse_datetime
 from core.github_sync import sync_issue
 from core.models import (
     Contribution,
+    EventConfig,
     Issue,
     Participant,
     Project,
@@ -139,6 +140,21 @@ def handle_pull_request_event(payload: dict) -> dict:
                 number__in=extracted_numbers,
             ).order_by('id').first()
 
+        # Respect submissions_paused (M4-T4, PRD §12.6, §15, plan.md M4-T4)
+        config = EventConfig.get_solo()
+        if config.submissions_paused:
+            logger.info(
+                "Submissions are paused (EventConfig.submissions_paused=True); skipping contribution creation for PR #%d in %s",
+                pr_number,
+                project.full_name,
+            )
+            return {
+                'status': 'submissions_paused',
+                'pr_id': pr_obj.id,
+                'issue_id': matching_issue.id if matching_issue else None,
+                'reason': 'Submissions are paused by admin configuration',
+            }
+
         if matching_issue and participant:
             with transaction.atomic():
                 contribution, created = Contribution.objects.get_or_create(
@@ -202,8 +218,29 @@ def handle_pull_request_event(payload: dict) -> dict:
                 pr_obj.merged_at = merged_at or timezone.now()
                 pr_obj.save(update_fields=['merged', 'merged_at'])
 
-                # Transition associated contributions to MERGED
                 contributions = list(Contribution.objects.filter(pull_request=pr_obj))
+                if not contributions and participant:
+                    # Catch-up for missed opened webhook: link matching issue
+                    title = pr_data.get('title') or ''
+                    body = pr_data.get('body') or ''
+                    head_ref = (pr_data.get('head') or {}).get('ref') or ''
+                    extracted_numbers = extract_issue_numbers(f"{title} {body} {head_ref}")
+                    if extracted_numbers:
+                        matching_issue = Issue.objects.filter(
+                            project=project,
+                            number__in=extracted_numbers,
+                        ).order_by('id').first()
+                        if matching_issue:
+                            contrib = Contribution.objects.create(
+                                participant=participant,
+                                pull_request=pr_obj,
+                                issue=matching_issue,
+                                status='MERGED',
+                                merged_at=pr_obj.merged_at,
+                            )
+                            contributions = [contrib]
+
+                # Transition associated contributions to MERGED
                 for contrib in contributions:
                     contrib.status = 'MERGED'
                     contrib.merged_at = pr_obj.merged_at
@@ -219,8 +256,28 @@ def handle_pull_request_event(payload: dict) -> dict:
                 pr_obj.merged = False
                 pr_obj.save(update_fields=['merged'])
 
-                # Transition associated contributions to REJECTED (closed without merge)
                 contributions = list(Contribution.objects.filter(pull_request=pr_obj))
+                if not contributions and participant:
+                    # Catch-up for missed opened webhook: link matching issue
+                    title = pr_data.get('title') or ''
+                    body = pr_data.get('body') or ''
+                    head_ref = (pr_data.get('head') or {}).get('ref') or ''
+                    extracted_numbers = extract_issue_numbers(f"{title} {body} {head_ref}")
+                    if extracted_numbers:
+                        matching_issue = Issue.objects.filter(
+                            project=project,
+                            number__in=extracted_numbers,
+                        ).order_by('id').first()
+                        if matching_issue:
+                            contrib = Contribution.objects.create(
+                                participant=participant,
+                                pull_request=pr_obj,
+                                issue=matching_issue,
+                                status='REJECTED',
+                            )
+                            contributions = [contrib]
+
+                # Transition associated contributions to REJECTED (closed without merge)
                 for contrib in contributions:
                     if contrib.status != 'MERGED':
                         contrib.status = 'REJECTED'

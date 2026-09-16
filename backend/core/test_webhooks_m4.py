@@ -1,3 +1,4 @@
+from datetime import timedelta
 import hashlib
 import hmac
 import json
@@ -8,8 +9,15 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from celery.exceptions import Retry
+from core.github_sync import (
+    GitHubAPIError,
+    GitHubClient,
+    GitHubRateLimitError,
+)
 from core.models import (
     Contribution,
+    EventConfig,
     Issue,
     IssueLabel,
     Participant,
@@ -17,7 +25,17 @@ from core.models import (
     PullRequest,
     WebhookEvent,
 )
-from core.tasks import process_webhook_event_task
+from core.reconciliation import (
+    has_recent_webhook_activity,
+    reconcile_all_repositories_nightly,
+    reconcile_recent_repositories,
+    reconcile_repository,
+)
+from core.tasks import (
+    process_webhook_event_task,
+    reconcile_all_repositories_nightly_task,
+    reconcile_recent_repositories_task,
+)
 from core.webhook_processing import extract_issue_numbers, process_webhook_event
 
 User = get_user_model()
@@ -725,3 +743,208 @@ class WebhookProcessingTestCase(TestCase):
         task_res2 = process_webhook_event_task(webhook_event.id)
         self.assertEqual(task_res2['status'], 'success')
         self.assertEqual(Contribution.objects.filter(pull_request__github_pr_id=7099).count(), 1)
+
+
+@override_settings(GITHUB_WEBHOOK_SECRET=TEST_WEBHOOK_SECRET)
+class SubmissionsPausedTestCase(TestCase):
+    """
+    Test suite for M4-T4: Respect submissions_paused (PRD §12.6, §15, plan.md M4-T4).
+    When submissions_paused is True:
+    - Webhook receiver still accepts valid signature, persists WebhookEvent, returns 200.
+    - Worker does NOT create or validate new Contribution records.
+    - Raw events remain in WebhookEvent for future replay.
+    - Other pause flags and issue caches are not disturbed.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username='paused_user', password='password123')
+        self.participant = Participant.objects.create(
+            user=self.user,
+            github_id=8801,
+            github_username='paused_coder',
+        )
+        self.proj = Project.objects.create(
+            github_repo_id=4001,
+            owner='hackit',
+            name='paused-repo',
+            full_name='hackit/paused-repo',
+            is_enabled=True,
+        )
+        self.issue = Issue.objects.create(
+            github_issue_id=41001,
+            project=self.proj,
+            number=15,
+            title='Core issue for paused submissions test',
+            points=100,
+            status='open',
+        )
+        self.config = EventConfig.get_solo()
+        self.config.submissions_paused = True
+        self.config.save(update_fields=['submissions_paused'])
+
+    def tearDown(self):
+        self.config.submissions_paused = False
+        self.config.save(update_fields=['submissions_paused'])
+
+    def test_m4_t4_webhook_receiver_accepts_and_persists_when_submissions_paused(self):
+        """Webhook receiver verifies HMAC, persists WebhookEvent, and returns 200 even when paused."""
+        payload = {
+            'action': 'opened',
+            'pull_request': {
+                'id': 4801,
+                'number': 1,
+                'title': 'Fixes #15',
+                'user': {'id': 8801, 'login': 'paused_coder'},
+                'head': {'sha': 'sha-paused-1', 'ref': 'patch-1'},
+                'merged': False,
+            },
+            'repository': {
+                'id': 4001,
+                'full_name': 'hackit/paused-repo',
+            },
+        }
+        body = json.dumps(payload).encode('utf-8')
+        sig = generate_hub_signature(body)
+        delivery_id = 'paused-deliv-001'
+
+        with patch('core.tasks.process_webhook_event_task.delay') as mock_delay:
+            response = self.client.post(
+                '/webhooks/github/',
+                data=body,
+                content_type='application/json',
+                HTTP_X_HUB_SIGNATURE_256=sig,
+                HTTP_X_GITHUB_DELIVERY=delivery_id,
+                HTTP_X_GITHUB_EVENT='pull_request',
+            )
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data['status'], 'ok')
+
+            # Verify WebhookEvent stored
+            event = WebhookEvent.objects.get(delivery_id=delivery_id)
+            self.assertEqual(event.event_type, 'pull_request')
+            self.assertIsNone(event.processed_at)
+            mock_delay.assert_called_once_with(event.id)
+
+    def test_m4_t4_worker_caches_pr_and_creates_no_contribution_when_submissions_paused(self):
+        """Worker caches PullRequest metadata but does NOT create Contribution when submissions_paused=True."""
+        payload = {
+            'action': 'opened',
+            'pull_request': {
+                'id': 4802,
+                'number': 2,
+                'title': 'Fixes #15 - paused PR submission',
+                'user': {'id': 8801, 'login': 'paused_coder'},
+                'head': {'sha': 'sha-paused-2', 'ref': 'patch-2'},
+                'merged': False,
+            },
+            'repository': {
+                'id': 4001,
+                'full_name': 'hackit/paused-repo',
+            },
+        }
+
+        webhook_event = WebhookEvent.objects.create(
+            delivery_id='paused-event-002',
+            event_type='pull_request',
+            payload=payload,
+        )
+
+        result = process_webhook_event(webhook_event)
+        self.assertEqual(result['status'], 'submissions_paused')
+        self.assertIn('reason', result)
+
+        # Assert PullRequest model was synchronized
+        pr = PullRequest.objects.filter(github_pr_id=4802).first()
+        self.assertIsNotNone(pr)
+        self.assertEqual(pr.number, 2)
+        self.assertEqual(pr.head_sha, 'sha-paused-2')
+
+        # Assert NO Contribution was created
+        self.assertEqual(Contribution.objects.filter(pull_request=pr).count(), 0)
+
+        # Assert WebhookEvent is cleanly marked processed with raw payload intact
+        webhook_event.refresh_from_db()
+        self.assertIsNotNone(webhook_event.processed_at)
+        self.assertEqual(webhook_event.processing_error, '')
+
+    def test_m4_t4_submissions_unpause_resumes_normal_contribution_creation(self):
+        """When submissions_paused is turned off, new submissions create Contributions normally."""
+        self.config.submissions_paused = False
+        self.config.save(update_fields=['submissions_paused'])
+
+        payload = {
+            'action': 'opened',
+            'pull_request': {
+                'id': 4803,
+                'number': 3,
+                'title': 'Fixes #15 - unpaused PR submission',
+                'user': {'id': 8801, 'login': 'paused_coder'},
+                'head': {'sha': 'sha-unpaused-3', 'ref': 'patch-3'},
+                'merged': False,
+            },
+            'repository': {
+                'id': 4001,
+                'full_name': 'hackit/paused-repo',
+            },
+        }
+
+        webhook_event = WebhookEvent.objects.create(
+            delivery_id='unpaused-event-003',
+            event_type='pull_request',
+            payload=payload,
+        )
+
+        result = process_webhook_event(webhook_event)
+        self.assertEqual(result['status'], 'contribution_created')
+
+        contrib = Contribution.objects.filter(pull_request__github_pr_id=4803).first()
+        self.assertIsNotNone(contrib)
+        self.assertEqual(contrib.status, 'PENDING')
+        self.assertEqual(contrib.issue, self.issue)
+        self.assertEqual(contrib.participant, self.participant)
+
+    def test_m4_t4_issues_webhook_unaffected_by_submissions_paused(self):
+        """Issue cache updates proceed normally even when submissions_paused=True."""
+        payload = {
+            'action': 'edited',
+            'issue': {
+                'id': 41001,
+                'number': 15,
+                'title': 'Updated Title while submissions paused',
+                'state': 'open',
+                'created_at': '2026-09-10T10:00:00Z',
+            },
+            'repository': {
+                'id': 4001,
+                'full_name': 'hackit/paused-repo',
+            },
+        }
+
+        webhook_event = WebhookEvent.objects.create(
+            delivery_id='paused-issue-event-004',
+            event_type='issues',
+            payload=payload,
+        )
+
+        result = process_webhook_event(webhook_event)
+        self.assertEqual(result['status'], 'issue_synced')
+
+        self.issue.refresh_from_db()
+        self.assertEqual(self.issue.title, 'Updated Title while submissions paused')
+
+    def test_m4_t4_submissions_paused_does_not_modify_unrelated_flags(self):
+        """Toggling submissions_paused leaves merge_paused, validation_paused, and leaderboard_frozen intact."""
+        self.config.merge_paused = True
+        self.config.validation_paused = False
+        self.config.leaderboard_frozen = True
+        self.config.submissions_paused = True
+        self.config.save()
+
+        fresh = EventConfig.get_solo()
+        self.assertTrue(fresh.submissions_paused)
+        self.assertTrue(fresh.merge_paused)
+        self.assertFalse(fresh.validation_paused)
+        self.assertTrue(fresh.leaderboard_frozen)
+
