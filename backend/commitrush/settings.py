@@ -59,7 +59,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-# REST Framework default configuration (PRD §16, §19, §20, Plan M3-T5)
+# REST Framework default configuration (PRD §16, §19, §20, Plan M3-T5, M7-T1)
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.SessionAuthentication',
@@ -73,7 +73,20 @@ REST_FRAMEWORK = {
         'user': '100/minute',
         'projects_list': '100/minute',
         'issues_list': '100/minute',
+        'leaderboard_list': '100/minute',
+        'profile_detail': '100/minute',
+        'stats_list': '120/minute',
     },
+}
+
+# Caching Configuration (PRD §10.2, §20, plan.md M7-T1)
+CACHE_BACKEND = os.environ.get('CACHE_BACKEND', 'django.core.cache.backends.locmem.LocMemCache')
+CACHES = {
+    'default': {
+        'BACKEND': CACHE_BACKEND,
+        'LOCATION': os.environ.get('REDIS_URL', 'commitrush-cache'),
+        'TIMEOUT': 60,
+    }
 }
 
 # CORS configuration for frontend local development
@@ -245,6 +258,7 @@ CELERY_TASK_ROUTES = {
     'core.tasks.requeue_stale_contributions_task': {'queue': 'sync'},
     'core.tasks.merge_contribution_task': {'queue': 'merge'},
     'core.tasks.process_merge_queue_task': {'queue': 'merge'},
+    'core.tasks.refresh_event_stats_task': {'queue': 'analytics'},
 }
 
 # Semaphore & Concurrency Settings (PRD §10.1, §12.3, Plan M6-T1)
@@ -271,5 +285,9 @@ CELERY_BEAT_SCHEDULE = {
     'process-merge-queue-10sec': {
         'task': 'core.tasks.process_merge_queue_task',
         'schedule': float(os.environ.get('MERGE_QUEUE_BEAT_SECONDS', 10)),  # Every 10 seconds by default
+    },
+    'refresh-event-stats-60sec': {
+        'task': 'core.tasks.refresh_event_stats_task',
+        'schedule': float(os.environ.get('STATS_REFRESH_BEAT_SECONDS', 60)),  # Every 60 seconds by default
     },
 }

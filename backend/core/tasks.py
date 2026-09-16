@@ -461,3 +461,32 @@ def process_merge_queue_task(self, batch_size: int | None = None) -> dict:
         'dispatched': dispatched,
         'dispatched_ids': dispatched_ids,
     }
+
+
+@shared_task(
+    bind=True,
+    name='core.tasks.refresh_event_stats_task',
+    queue='analytics',
+    max_retries=3,
+)
+def refresh_event_stats_task(self) -> dict:
+    """
+    Periodic Celery Beat task to refresh aggregate event statistics in cache (PRD §8.6, §16, §23, Plan M7-T5).
+    Reads authoritative counts and point totals from PostgreSQL and populates Redis cache.
+    Zero external GitHub API calls.
+    """
+    from core.stats import calculate_event_stats, set_cached_event_stats, STATS_CACHE_TTL
+
+    try:
+        stats = calculate_event_stats()
+        cached = set_cached_event_stats(stats, ttl=STATS_CACHE_TTL)
+        logger.info("Refreshed aggregate event stats in cache (cached=%s)", cached)
+        return {
+            'status': 'success',
+            'cached': cached,
+            'updated_at': stats['updated_at'],
+        }
+    except Exception as e:
+        logger.error("Failed refreshing aggregate event stats: %s", e)
+        raise self.retry(exc=e, countdown=10, max_retries=3)
+

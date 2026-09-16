@@ -1,33 +1,47 @@
 import logging
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import exceptions, generics, permissions, status
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
+from rest_framework.settings import api_settings
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from rest_framework.views import APIView
 
-from core.models import AuditLog, Contribution, Issue, Participant, PointTransaction, Project
+from core.leaderboard import calculate_participant_rank, fetch_leaderboard_data, invalidate_leaderboard_cache
+from core.stats import fetch_event_stats
+from core.models import (
+    AuditLog,
+    Contribution,
+    DailyContributionUsage,
+    EventConfig,
+    Issue,
+    Participant,
+    PointTransaction,
+    Project,
+)
 from core.serializers import (
     AdminPointAdjustmentSerializer,
     ContributionSerializer,
+    DashboardSerializer,
+    EventStatsSerializer,
     IssueDetailSerializer,
     IssueListSerializer,
+    LeaderboardEntrySerializer,
     ProjectDetailSerializer,
     ProjectListSerializer,
+    PublicProfileSerializer,
 )
 
 logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Throttling Classes (PRD §16, §19, §20, Plan M3-T5)
+# Throttling Classes (PRD §16, §19, §20, Plan M3-T5, M7-T1, M7-T4)
 # =============================================================================
-
-from django.conf import settings
-from rest_framework.settings import api_settings
-
 
 class DynamicRateMixin:
     """Helper to dynamically resolve throttle rates from active Django settings."""
@@ -73,6 +87,61 @@ class IssuesListUserRateThrottle(DynamicRateMixin, UserRateThrottle):
             'scope': self.scope,
             'ident': request.user.pk
         }
+
+
+class LeaderboardAnonRateThrottle(DynamicRateMixin, AnonRateThrottle):
+    """Anonymous IP-based rate throttle for the /leaderboard/ list endpoint (~100 req/min)."""
+    scope = 'leaderboard_list'
+
+
+class LeaderboardUserRateThrottle(DynamicRateMixin, UserRateThrottle):
+    """Authenticated user rate throttle for the /leaderboard/ list endpoint (~100 req/min)."""
+    scope = 'leaderboard_list'
+
+    def get_cache_key(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return None
+        return self.cache_format % {
+            'scope': self.scope,
+            'ident': request.user.pk
+        }
+
+
+class ProfileAnonRateThrottle(DynamicRateMixin, AnonRateThrottle):
+    """Anonymous IP-based rate throttle for the /profile/{username}/ endpoint (~100 req/min)."""
+    scope = 'profile_detail'
+
+
+class ProfileUserRateThrottle(DynamicRateMixin, UserRateThrottle):
+    """Authenticated user rate throttle for the /profile/{username}/ endpoint (~100 req/min)."""
+    scope = 'profile_detail'
+
+    def get_cache_key(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return None
+        return self.cache_format % {
+            'scope': self.scope,
+            'ident': request.user.pk
+        }
+
+
+class StatsAnonRateThrottle(DynamicRateMixin, AnonRateThrottle):
+    """Anonymous IP-based rate throttle for the /stats/ endpoint (~120 req/min)."""
+    scope = 'stats_list'
+
+
+class StatsUserRateThrottle(DynamicRateMixin, UserRateThrottle):
+    """Authenticated user rate throttle for the /stats/ endpoint (~120 req/min)."""
+    scope = 'stats_list'
+
+    def get_cache_key(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return None
+        return self.cache_format % {
+            'scope': self.scope,
+            'ident': request.user.pk
+        }
+
 
 
 
@@ -516,6 +585,9 @@ class AdminPointAdjustmentView(APIView):
                 },
             )
 
+            # Invalidate cached leaderboard pages
+            invalidate_leaderboard_cache()
+
             logger.info(
                 "Admin %s adjusted points for %s by %d (new total: %d, txn: %d, reason: '%s')",
                 request.user.username,
@@ -539,3 +611,250 @@ class AdminPointAdjustmentView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
+
+
+# =============================================================================
+# M7 Leaderboard, Dashboard & Public Profile Views (PRD §8.6, §16, §19, §20)
+# =============================================================================
+
+class LeaderboardView(APIView):
+    """
+    M7-T1 & M7-T2: GET /api/v1/leaderboard/
+    Returns paginated public leaderboard rankings (PRD §8.6, §16, §20).
+    Ordering: total_points DESC, merged_count DESC, id ASC.
+    Optimized with Redis caching (TTL ~60s) and fallback to indexed PostgreSQL query.
+    Supports ?include_me=true to include the authenticated participant's own rank.
+    Respects EventConfig.leaderboard_frozen state (M7-T2).
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [LeaderboardAnonRateThrottle, LeaderboardUserRateThrottle]
+
+    def get(self, request):
+        page_raw = request.query_params.get('page', '1')
+        page_size_raw = request.query_params.get('page_size', '20')
+
+        try:
+            page = int(page_raw)
+            if page < 1:
+                page = 1
+        except (ValueError, TypeError):
+            raise ValidationError({'page': f"Invalid page number '{page_raw}'."})
+
+        try:
+            page_size = int(page_size_raw)
+            if page_size < 1:
+                page_size = 20
+            elif page_size > 100:
+                page_size = 100
+        except (ValueError, TypeError):
+            raise ValidationError({'page_size': f"Invalid page_size '{page_size_raw}'."})
+
+        # Check include_me / current participant
+        current_participant = None
+        include_me_param = request.query_params.get('include_me')
+        wants_me = False
+        if include_me_param is not None:
+            wants_me = parse_boolean_param(include_me_param, 'include_me')
+        else:
+            wants_me = bool(request.user and request.user.is_authenticated)
+
+        if wants_me and request.user and request.user.is_authenticated:
+            current_participant = getattr(request.user, 'participant', None)
+
+        data = fetch_leaderboard_data(
+            page=page,
+            page_size=page_size,
+            current_participant=current_participant if wants_me else None,
+        )
+
+        base_url = request.build_absolute_uri(request.path)
+        next_url = None
+        prev_url = None
+        total_pages = data['total_pages']
+        count = data['count']
+
+        if page < total_pages and (page * page_size) < count:
+            next_url = f"{base_url}?page={page + 1}&page_size={page_size}"
+        if page > 1 and page <= total_pages + 1:
+            prev_url = f"{base_url}?page={page - 1}&page_size={page_size}"
+
+        response_payload = {
+            'count': data['count'],
+            'page': data['page'],
+            'page_size': data['page_size'],
+            'total_pages': data['total_pages'],
+            'next': next_url,
+            'previous': prev_url,
+            'is_frozen': data['is_frozen'],
+            'results': data['results'],
+            'me': data['me'],
+        }
+
+        return Response(response_payload, status=status.HTTP_200_OK)
+
+
+class DashboardView(APIView):
+    """
+    M7-T3: GET /api/v1/dashboard/
+    Single aggregated endpoint serving the authenticated participant's complete dashboard (PRD §16, Plan M7-T3).
+    Returns:
+    - participant profile (id, github_id, github_username, avatar_url, is_suspended)
+    - rank (matching exact leaderboard ordering)
+    - total points
+    - merged contribution count
+    - daily usage & limit progress (contributions count, points count, caps)
+    - in-progress contributions (non-terminal states)
+    - recent activity (latest 10 contributions)
+    Zero synchronous calls to GitHub.
+    Enforces object-level authentication (request.user).
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        participant = getattr(user, 'participant', None)
+        if not participant:
+            raise NotFound("Participant profile not found for authenticated user.")
+
+        config = EventConfig.get_solo()
+        today = timezone.now().date()
+
+        # Authoritative daily usage
+        daily_usage, _ = DailyContributionUsage.objects.get_or_create(
+            participant=participant,
+            date=today,
+            defaults={'contributions_count': 0, 'points_count': 0},
+        )
+
+        daily_usage_data = {
+            'date': today,
+            'contributions_count': daily_usage.contributions_count,
+            'max_contributions': config.max_contributions_per_day,
+            'points_count': daily_usage.points_count,
+            'max_points': config.max_points_per_day,
+        }
+
+        # Calculate exact rank matching leaderboard
+        rank = calculate_participant_rank(participant.id)
+
+        # In-progress contributions (non-terminal states per PRD §11)
+        in_progress_statuses = ['PENDING', 'QUEUED', 'UNDER_REVIEW', 'APPROVED', 'MERGING', 'RETRY', 'FLAGGED']
+        in_progress_qs = (
+            Contribution.objects.filter(
+                participant=participant,
+                status__in=in_progress_statuses,
+            )
+            .select_related('participant', 'issue__project', 'pull_request__repo')
+            .order_by('-created_at', '-id')
+        )
+
+        # Recent activity (all statuses, bounded to latest 10)
+        recent_activity_qs = (
+            Contribution.objects.filter(participant=participant)
+            .select_related('participant', 'issue__project', 'pull_request__repo')
+            .order_by('-created_at', '-id')[:10]
+        )
+
+        dashboard_data = {
+            'participant': participant,
+            'rank': rank,
+            'total_points': participant.total_points,
+            'merged_count': participant.merged_count,
+            'daily_usage': daily_usage_data,
+            'in_progress_contributions': in_progress_qs,
+            'recent_activity': recent_activity_qs,
+        }
+
+        serializer = DashboardSerializer(dashboard_data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class PublicProfileView(APIView):
+    """
+    M7-T4: GET /api/v1/profile/<str:username>/
+    Public contributor profile API exposing safe aggregate metrics only (PRD §16, §19, Plan M7-T4).
+    Excludes private workflow details, internal moderation flags, tokens, or audit logs.
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ProfileAnonRateThrottle, ProfileUserRateThrottle]
+
+    def get(self, request, username):
+        clean_username = username.strip() if username else ''
+        if not clean_username:
+            raise NotFound("Username parameter is required.")
+
+        participant = Participant.objects.filter(
+            github_username__iexact=clean_username
+        ).first()
+
+        if not participant or participant.is_suspended:
+            raise NotFound(f"Participant '{clean_username}' not found.")
+
+        # Aggregate counts
+        contributions_qs = participant.contributions.all()
+        total_contributions = contributions_qs.count()
+        merged_contributions = contributions_qs.filter(status='MERGED').count()
+        in_progress_contributions = contributions_qs.filter(
+            status__in=['PENDING', 'QUEUED', 'UNDER_REVIEW', 'APPROVED', 'MERGING', 'RETRY', 'FLAGGED']
+        ).count()
+        rejected_contributions = contributions_qs.filter(status='REJECTED').count()
+
+        # Rank
+        rank = calculate_participant_rank(participant.id)
+
+        # Safe recent merged contributions (latest 5)
+        recent_merged_qs = (
+            contributions_qs.filter(status='MERGED')
+            .select_related('issue__project', 'pull_request__repo')
+            .order_by('-merged_at', '-id')[:5]
+        )
+
+        recent_merged = [
+            {
+                'id': c.id,
+                'project_name': c.pull_request.repo.full_name if c.pull_request and c.pull_request.repo else (c.issue.project.full_name if c.issue else ''),
+                'issue_number': c.issue.number if c.issue else 0,
+                'issue_title': c.issue.title if c.issue else '',
+                'points': c.issue.points if c.issue else 0,
+                'merged_at': c.merged_at,
+                'github_url': f"https://github.com/{c.pull_request.repo.full_name}/pull/{c.pull_request.number}" if c.pull_request and c.pull_request.repo else '',
+            }
+            for c in recent_merged_qs
+        ]
+
+        profile_data = {
+            'id': participant.id,
+            'github_id': participant.github_id,
+            'github_username': participant.github_username,
+            'avatar_url': participant.avatar_url,
+            'total_points': participant.total_points,
+            'merged_count': participant.merged_count,
+            'rank': rank,
+            'stats': {
+                'total_contributions': total_contributions,
+                'merged_contributions': merged_contributions,
+                'in_progress_contributions': in_progress_contributions,
+                'rejected_contributions': rejected_contributions,
+            },
+            'recent_merged_contributions': recent_merged,
+        }
+
+        serializer = PublicProfileSerializer(profile_data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class EventStatsView(APIView):
+    """
+    M7-T5: GET /api/v1/stats/
+    Public aggregate event stats endpoint (PRD §8.6, §16, §23, Plan M7-T5).
+    Cached with ~60s TTL, refreshed asynchronously by Celery Beat.
+    Zero synchronous GitHub calls.
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [StatsAnonRateThrottle, StatsUserRateThrottle]
+
+    def get(self, request):
+        stats_data = fetch_event_stats()
+        serializer = EventStatsSerializer(stats_data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+

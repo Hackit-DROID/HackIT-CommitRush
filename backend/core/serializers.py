@@ -264,3 +264,134 @@ class AdminPointAdjustmentSerializer(serializers.Serializer):
         if not Participant.objects.filter(id=value).exists():
             raise serializers.ValidationError(f"Participant with ID {value} does not exist.")
         return value
+
+
+# =============================================================================
+# M7 Leaderboard, Dashboard & Public Profile Serializers (PRD §16, §19)
+# =============================================================================
+
+class LeaderboardEntrySerializer(serializers.Serializer):
+    """
+    Public serializer for individual leaderboard entries (PRD §8.6, §16, Plan M7-T1).
+    """
+    rank = serializers.IntegerField(read_only=True)
+    participant_id = serializers.IntegerField(read_only=True)
+    github_username = serializers.CharField(read_only=True)
+    avatar_url = serializers.CharField(read_only=True, allow_null=True)
+    total_points = serializers.IntegerField(read_only=True)
+    merged_count = serializers.IntegerField(read_only=True)
+
+
+class DailyUsageSerializer(serializers.Serializer):
+    """
+    Serializer for daily contribution and point usage (PRD §14, §16, Plan M7-T3).
+    """
+    date = serializers.DateField(read_only=True)
+    contributions_count = serializers.IntegerField(read_only=True)
+    max_contributions = serializers.IntegerField(read_only=True)
+    points_count = serializers.IntegerField(read_only=True)
+    max_points = serializers.IntegerField(read_only=True)
+
+
+class DashboardSerializer(serializers.Serializer):
+    """
+    Aggregated participant dashboard serializer serving full state in 1 round trip (PRD §16, Plan M7-T3).
+    """
+    participant = ContributionParticipantSerializer(read_only=True)
+    rank = serializers.IntegerField(read_only=True, allow_null=True)
+    total_points = serializers.IntegerField(read_only=True)
+    merged_count = serializers.IntegerField(read_only=True)
+    daily_usage = DailyUsageSerializer(read_only=True)
+    in_progress_contributions = ContributionSerializer(many=True, read_only=True)
+    recent_activity = ContributionSerializer(many=True, read_only=True)
+
+
+class PublicProfileStatsSerializer(serializers.Serializer):
+    """
+    Public aggregate contribution metrics for a participant profile (PRD §16, §19, Plan M7-T4).
+    """
+    total_contributions = serializers.IntegerField(read_only=True)
+    merged_contributions = serializers.IntegerField(read_only=True)
+    in_progress_contributions = serializers.IntegerField(read_only=True)
+    rejected_contributions = serializers.IntegerField(read_only=True)
+
+
+class PublicProfileContributionSerializer(serializers.Serializer):
+    """
+    Safe public serializer for a participant's merged contribution (PRD §16, §19, Plan M7-T4).
+    Excludes private workflow metadata, audit reasons, or tokens.
+    """
+    id = serializers.IntegerField(read_only=True)
+    project_name = serializers.CharField(read_only=True)
+    issue_number = serializers.IntegerField(read_only=True)
+    issue_title = serializers.CharField(read_only=True)
+    points = serializers.IntegerField(read_only=True)
+    merged_at = serializers.DateTimeField(read_only=True, allow_null=True)
+    github_url = serializers.CharField(read_only=True)
+
+
+class PublicProfileSerializer(serializers.Serializer):
+    """
+    Safe public contributor profile serializer (PRD §16, §19, Plan M7-T4).
+    Whitelists only public contributor identity, rank, and aggregate metrics.
+    """
+    id = serializers.IntegerField(read_only=True)
+    github_id = serializers.IntegerField(read_only=True)
+    github_username = serializers.CharField(read_only=True)
+    avatar_url = serializers.CharField(read_only=True, allow_null=True)
+    total_points = serializers.IntegerField(read_only=True)
+    merged_count = serializers.IntegerField(read_only=True)
+    rank = serializers.IntegerField(read_only=True, allow_null=True)
+    stats = PublicProfileStatsSerializer(read_only=True)
+    recent_merged_contributions = PublicProfileContributionSerializer(many=True, read_only=True)
+
+
+# =============================================================================
+# M7-T5 Event Statistics Serializers (PRD §8.6, §16, §23)
+# =============================================================================
+
+class SystemStatusSerializer(serializers.Serializer):
+    merge_paused = serializers.BooleanField(read_only=True)
+    validation_paused = serializers.BooleanField(read_only=True)
+    submissions_paused = serializers.BooleanField(read_only=True)
+    leaderboard_frozen = serializers.BooleanField(read_only=True)
+
+
+class StatsParticipantsSerializer(serializers.Serializer):
+    total = serializers.IntegerField(read_only=True)
+    active = serializers.IntegerField(read_only=True)
+
+
+class StatsPullRequestsSerializer(serializers.Serializer):
+    total = serializers.IntegerField(read_only=True)
+    merged = serializers.IntegerField(read_only=True)
+
+
+class StatsContributionsSerializer(serializers.Serializer):
+    total = serializers.IntegerField(read_only=True)
+    by_status = serializers.DictField(child=serializers.IntegerField(), read_only=True)
+
+
+class StatsPointsSerializer(serializers.Serializer):
+    total_awarded = serializers.IntegerField(read_only=True)
+    points_past_hour = serializers.IntegerField(read_only=True)
+
+
+class StatsRatesSerializer(serializers.Serializer):
+    merges_past_hour = serializers.IntegerField(read_only=True)
+    points_past_hour = serializers.IntegerField(read_only=True)
+
+
+class EventStatsSerializer(serializers.Serializer):
+    """
+    Public aggregate event stats serializer (PRD §8.6, §16, §23, Plan M7-T5).
+    """
+    event_status = serializers.CharField(read_only=True)
+    system_status = SystemStatusSerializer(read_only=True)
+    participants = StatsParticipantsSerializer(read_only=True)
+    pull_requests = StatsPullRequestsSerializer(read_only=True)
+    contributions = StatsContributionsSerializer(read_only=True)
+    points = StatsPointsSerializer(read_only=True)
+    rates = StatsRatesSerializer(read_only=True)
+    updated_at = serializers.CharField(read_only=True)
+

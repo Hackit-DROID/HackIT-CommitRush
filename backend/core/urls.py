@@ -2,11 +2,15 @@ from django.urls import path
 from core.api_views import (
     AdminPointAdjustmentView,
     ContributionDetailView,
+    DashboardView,
     IssueDetailView,
     IssueListView,
+    LeaderboardView,
     MyContributionsListView,
     ProjectDetailView,
     ProjectListView,
+    PublicProfileView,
+    EventStatsView,
 )
 from core.auth_views import (
     github_callback_view,
@@ -35,4 +39,10 @@ urlpatterns = [
     path('contributions/<int:pk>/', ContributionDetailView.as_view(), name='contribution-detail'),
     # M6 Admin Points Adjustment (PRD §14, §16, Plan M6-T6)
     path('admin/points/adjust/', AdminPointAdjustmentView.as_view(), name='admin-point-adjust'),
+    # M7 Leaderboard, Dashboard, Profile & Stats (PRD §8.6, §16, Plan M7-T1, M7-T2, M7-T3, M7-T4, M7-T5)
+    path('leaderboard/', LeaderboardView.as_view(), name='leaderboard'),
+    path('dashboard/', DashboardView.as_view(), name='dashboard'),
+    path('profile/<str:username>/', PublicProfileView.as_view(), name='profile-detail'),
+    path('stats/', EventStatsView.as_view(), name='stats'),
 ]
+
