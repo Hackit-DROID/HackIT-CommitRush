@@ -22,7 +22,9 @@ from core.models import (
     Participant,
     PointTransaction,
     Project,
+    WebhookEvent,
 )
+from core.semaphore import RedisMergeSemaphore
 from core.serializers import (
     AdminPointAdjustmentSerializer,
     ContributionSerializer,
@@ -31,6 +33,7 @@ from core.serializers import (
     IssueDetailSerializer,
     IssueListSerializer,
     LeaderboardEntrySerializer,
+    OpsMetricsResponseSerializer,
     ProjectDetailSerializer,
     ProjectListSerializer,
     PublicProfileSerializer,
@@ -857,4 +860,71 @@ class EventStatsView(APIView):
         stats_data = fetch_event_stats()
         serializer = EventStatsSerializer(stats_data)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class OpsMetricsView(APIView):
+    """
+    M8-T6: GET /api/v1/ops/metrics/
+    Operator dashboard metrics endpoint (PRD §12.6, §18, Plan M8-T6).
+    Restricted to staff/admin users (permissions.IsAdminUser).
+    Zero synchronous GitHub calls.
+    """
+    permission_classes = [permissions.IsAdminUser]
+
+    def get(self, request):
+        config = EventConfig.get_solo()
+        now = timezone.now()
+
+        # 1. Queue counts
+        validation_queued = Contribution.objects.filter(status='QUEUED').count()
+        validation_under_review = Contribution.objects.filter(status='UNDER_REVIEW').count()
+        merge_approved = Contribution.objects.filter(status='APPROVED').count()
+        merge_active = Contribution.objects.filter(status='MERGING').count()
+        flagged_or_retry = Contribution.objects.filter(status__in=['FLAGGED', 'RETRY']).count()
+        webhooks_total = WebhookEvent.objects.count()
+        webhooks_unprocessed = WebhookEvent.objects.filter(processed_at__isnull=True).count()
+
+        # 2. Merge semaphore usage
+        semaphore = RedisMergeSemaphore()
+        active_semaphore_slots = semaphore.get_current_usage()
+        available_slots = max(0, config.merge_concurrency - active_semaphore_slots)
+
+        # 3. Oldest queued item age
+        oldest_queued = Contribution.objects.filter(status__in=['QUEUED', 'APPROVED']).order_by('created_at').first()
+        oldest_age = int((now - oldest_queued.created_at).total_seconds()) if oldest_queued else None
+
+        # 4. Last webhook activity
+        last_webhook = WebhookEvent.objects.order_by('-id').first()
+        last_webhook_at = last_webhook.processed_at if (last_webhook and last_webhook.processed_at) else None
+
+        data = {
+            'event_status': config.event_status,
+            'system_status': {
+                'merge_paused': config.merge_paused,
+                'validation_paused': config.validation_paused,
+                'submissions_paused': config.submissions_paused,
+                'leaderboard_frozen': config.leaderboard_frozen,
+            },
+            'queues': {
+                'validation_queued': validation_queued,
+                'validation_under_review': validation_under_review,
+                'merge_approved': merge_approved,
+                'merge_active': merge_active,
+                'flagged_or_retry': flagged_or_retry,
+                'webhooks_total': webhooks_total,
+                'webhooks_unprocessed': webhooks_unprocessed,
+            },
+            'semaphore': {
+                'configured_concurrency': config.merge_concurrency,
+                'active_semaphore_slots': active_semaphore_slots,
+                'available_slots': available_slots,
+            },
+            'oldest_queued_item_age_seconds': oldest_age,
+            'last_webhook_received_at': last_webhook_at,
+            'generated_at': now,
+        }
+
+        serializer = OpsMetricsResponseSerializer(data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 

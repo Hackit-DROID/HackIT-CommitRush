@@ -395,3 +395,34 @@ class EventStatsSerializer(serializers.Serializer):
     rates = StatsRatesSerializer(read_only=True)
     updated_at = serializers.CharField(read_only=True)
 
+
+# =============================================================================
+# M8-T6 Ops Panel Serializers (PRD §12.6, §18, Plan M8-T6)
+# =============================================================================
+
+class OpsQueuesSerializer(serializers.Serializer):
+    validation_queued = serializers.IntegerField(read_only=True)
+    validation_under_review = serializers.IntegerField(read_only=True)
+    merge_approved = serializers.IntegerField(read_only=True)
+    merge_active = serializers.IntegerField(read_only=True)
+    flagged_or_retry = serializers.IntegerField(read_only=True)
+    webhooks_total = serializers.IntegerField(read_only=True)
+    webhooks_unprocessed = serializers.IntegerField(read_only=True)
+
+
+class OpsSemaphoreSerializer(serializers.Serializer):
+    configured_concurrency = serializers.IntegerField(read_only=True)
+    active_semaphore_slots = serializers.IntegerField(read_only=True)
+    available_slots = serializers.IntegerField(read_only=True)
+
+
+class OpsMetricsResponseSerializer(serializers.Serializer):
+    event_status = serializers.CharField(read_only=True)
+    system_status = SystemStatusSerializer(read_only=True)
+    queues = OpsQueuesSerializer(read_only=True)
+    semaphore = OpsSemaphoreSerializer(read_only=True)
+    oldest_queued_item_age_seconds = serializers.IntegerField(read_only=True, allow_null=True)
+    last_webhook_received_at = serializers.DateTimeField(read_only=True, allow_null=True)
+    generated_at = serializers.DateTimeField(read_only=True)
+
+

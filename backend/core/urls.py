@@ -11,6 +11,7 @@ from core.api_views import (
     ProjectListView,
     PublicProfileView,
     EventStatsView,
+    OpsMetricsView,
 )
 from core.auth_views import (
     github_callback_view,
@@ -44,5 +45,8 @@ urlpatterns = [
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
     path('profile/<str:username>/', PublicProfileView.as_view(), name='profile-detail'),
     path('stats/', EventStatsView.as_view(), name='stats'),
+    # M8 Custom Ops Panel API (PRD §12.6, §18, Plan M8-T6)
+    path('admin/ops/', OpsMetricsView.as_view(), name='admin-ops-metrics'),
+    path('ops/metrics/', OpsMetricsView.as_view(), name='ops-metrics'),
 ]
 
