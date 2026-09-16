@@ -223,6 +223,10 @@ CELERY_TASK_QUEUES = {
         'exchange': 'validation',
         'routing_key': 'validation',
     },
+    'merge': {
+        'exchange': 'merge',
+        'routing_key': 'merge',
+    },
     'sync': {
         'exchange': 'sync',
         'routing_key': 'sync',
@@ -239,7 +243,13 @@ CELERY_TASK_ROUTES = {
     'core.tasks.reconcile_all_repositories_nightly_task': {'queue': 'sync'},
     'core.tasks.validate_contribution_task': {'queue': 'validation'},
     'core.tasks.requeue_stale_contributions_task': {'queue': 'sync'},
+    'core.tasks.merge_contribution_task': {'queue': 'merge'},
+    'core.tasks.process_merge_queue_task': {'queue': 'merge'},
 }
+
+# Semaphore & Concurrency Settings (PRD §10.1, §12.3, Plan M6-T1)
+MERGE_SEMAPHORE_KEY = os.environ.get('MERGE_SEMAPHORE_KEY', 'commitrush:semaphore:merge')
+MERGE_SEMAPHORE_TTL = int(os.environ.get('MERGE_SEMAPHORE_TTL', '120'))
 
 # Reconciliation & Worker Configuration (PRD §11.2, §12.4, §13.4, plan.md M4-T5, M5-T3)
 RECONCILIATION_RECENT_WINDOW_MINUTES = int(os.environ.get('RECONCILIATION_RECENT_WINDOW_MINUTES', '15'))
@@ -257,5 +267,9 @@ CELERY_BEAT_SCHEDULE = {
     'requeue-stale-contributions-5min': {
         'task': 'core.tasks.requeue_stale_contributions_task',
         'schedule': float(os.environ.get('RECOVERY_SWEEP_SECONDS', 5 * 60)),  # Every 5 minutes by default
+    },
+    'process-merge-queue-10sec': {
+        'task': 'core.tasks.process_merge_queue_task',
+        'schedule': float(os.environ.get('MERGE_QUEUE_BEAT_SECONDS', 10)),  # Every 10 seconds by default
     },
 }
