@@ -2,6 +2,7 @@ import logging
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from core.leaderboard import invalidate_leaderboard_cache
 from core.models import (
     Contribution,
     DailyContributionUsage,
@@ -113,9 +114,13 @@ def award_points_for_contribution(contribution_or_id: Contribution | int) -> dic
             daily_usage.points_count += issue_points
             daily_usage.save(update_fields=['contributions_count', 'points_count'])
 
-            # Update participant total points
+            # Update participant total points and merged count
             participant.total_points += issue_points
-            participant.save(update_fields=['total_points'])
+            participant.merged_count = participant.contributions.filter(status='MERGED').count()
+            participant.save(update_fields=['total_points', 'merged_count'])
+
+            # Invalidate cached leaderboard pages
+            invalidate_leaderboard_cache()
 
             logger.info(
                 "Awarded %d points to %s for Contribution %s (txn %d, daily usage: %d/%d contribs, %d/%d pts)",
@@ -150,6 +155,13 @@ def award_points_for_contribution(contribution_or_id: Contribution | int) -> dic
                 status='DEFERRED',
                 reason=defer_reason,
             )
+
+            # Update participant merged count (since contribution is still MERGED)
+            participant.merged_count = participant.contributions.filter(status='MERGED').count()
+            participant.save(update_fields=['merged_count'])
+
+            # Invalidate cached leaderboard pages
+            invalidate_leaderboard_cache()
 
             logger.info(
                 "Deferred points for Contribution %s (Participant %s): %s",
