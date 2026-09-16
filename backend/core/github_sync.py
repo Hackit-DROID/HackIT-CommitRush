@@ -4,7 +4,7 @@ import requests
 from django.conf import settings
 from django.db import transaction
 
-from core.models import Project
+from core.models import Issue, IssueLabel, Project
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +166,107 @@ class GitHubClient:
         logger.warning("GitHub API unexpected response HTTP %s for %s/%s", response.status_code, owner, repo)
         raise GitHubAPIError(f"GitHub API returned unexpected status {response.status_code}.")
 
+    def get_issues(self, owner: str, repo: str, state: str = 'all') -> list[dict]:
+        """
+        Fetch all issues for repository from GET /repos/{owner}/{repo}/issues.
+        Handles multi-page pagination. Filters out pull requests.
+        """
+        if not owner or not repo:
+            raise ValueError("Owner and repository name must be non-empty.")
+
+        url = f"{self.base_url}/repos/{owner}/{repo}/issues"
+        headers = self._get_headers()
+        params = {
+            'state': state,
+            'per_page': 100,
+            'page': 1,
+        }
+
+        all_issues = []
+
+        while url:
+            try:
+                response = self.session.get(
+                    url,
+                    headers=headers,
+                    params=params,
+                    timeout=self.timeout,
+                )
+            except requests.Timeout as e:
+                logger.warning("GitHub API request timed out fetching issues for %s/%s", owner, repo)
+                raise GitHubNetworkError(f"GitHub API request timed out after {self.timeout}s.") from e
+            except requests.RequestException as e:
+                logger.warning("GitHub API network failure fetching issues for %s/%s", owner, repo)
+                raise GitHubNetworkError("Failed to communicate with GitHub REST API.") from e
+
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                except ValueError as e:
+                    raise GitHubDataError("Invalid JSON returned by GitHub API.") from e
+
+                if not isinstance(data, list):
+                    raise GitHubDataError("Malformed response payload returned by GitHub API (expected JSON array).")
+
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    # Skip Pull Requests returned by GitHub's issues endpoint
+                    if 'pull_request' in item:
+                        continue
+                    if 'id' in item and 'number' in item:
+                        all_issues.append(item)
+
+                # Check Link header for rel="next"
+                next_url = None
+                if 'Link' in response.headers:
+                    links = requests.utils.parse_header_links(response.headers['Link'])
+                    for link in links:
+                        if link.get('rel') == 'next':
+                            next_url = link.get('url')
+                            break
+
+                if next_url:
+                    url = next_url
+                    params = None  # query params already part of next_url
+                else:
+                    # Fallback pagination if Link header missing but full page returned
+                    if params and len(data) == params.get('per_page', 100):
+                        params['page'] += 1
+                    else:
+                        url = None
+
+                continue
+
+            if response.status_code == 404:
+                logger.info("GitHub repository %s/%s not found when fetching issues (HTTP 404)", owner, repo)
+                raise GitHubResourceNotFoundError(f"Repository '{owner}/{repo}' was not found on GitHub (HTTP 404).")
+
+            if response.status_code == 401:
+                logger.warning("GitHub authentication failed fetching issues for %s/%s (HTTP 401)", owner, repo)
+                raise GitHubAuthenticationError("GitHub API authentication failed (HTTP 401). Verify GITHUB_API_TOKEN configuration.")
+
+            if response.status_code == 403:
+                rate_remaining = response.headers.get('X-RateLimit-Remaining')
+                if rate_remaining == '0':
+                    logger.warning("GitHub API rate limit reached (HTTP 403)")
+                    raise GitHubRateLimitError("GitHub API rate limit exceeded (HTTP 403).")
+                logger.warning("GitHub API permission denied or rate limited (HTTP 403) for %s/%s", owner, repo)
+                raise GitHubAuthenticationError(f"GitHub API permission denied or rate limited (HTTP 403) for '{owner}/{repo}'.")
+
+            if response.status_code == 429:
+                logger.warning("GitHub API rate limit reached (HTTP 429)")
+                raise GitHubRateLimitError("GitHub API rate limit reached (HTTP 429).")
+
+            if response.status_code >= 500:
+                logger.warning("GitHub API server error HTTP %s fetching issues for %s/%s", response.status_code, owner, repo)
+                raise GitHubAPIError(f"GitHub API server error (HTTP {response.status_code}).")
+
+            logger.warning("GitHub API unexpected response HTTP %s fetching issues for %s/%s", response.status_code, owner, repo)
+            raise GitHubAPIError(f"GitHub API returned unexpected status {response.status_code}.")
+
+        return all_issues
+
 
 def sync_project(repo_data: dict) -> tuple[Project, bool]:
     """
@@ -243,6 +344,150 @@ def sync_project(repo_data: dict) -> tuple[Project, bool]:
         return project, True
 
 
+def sync_label(label_data: dict | str) -> tuple[IssueLabel | None, bool]:
+    """
+    Synchronize a single GitHub label into the IssueLabel model.
+    Handles dict payloads ({'name': '...', 'color': '...'}) and string names.
+    
+    Mapping rules:
+    - name: label name (globally unique per schema, stripped, max 255 chars)
+    - color: label hex color code (stripped, max 50 chars)
+    
+    Returns (IssueLabel instance or None, created: bool).
+    """
+    if isinstance(label_data, dict):
+        raw_name = label_data.get('name')
+        raw_color = label_data.get('color')
+    elif isinstance(label_data, str):
+        raw_name = label_data
+        raw_color = ''
+    else:
+        return None, False
+
+    name = (raw_name or '').strip()
+    if not name:
+        return None, False
+
+    color = (raw_color or '').strip()
+
+    with transaction.atomic():
+        label = IssueLabel.objects.select_for_update().filter(name=name).first()
+        if label:
+            if color and label.color != color:
+                label.color = color
+                label.save(update_fields=['color'])
+            return label, False
+
+        label, created = IssueLabel.objects.get_or_create(
+            name=name,
+            defaults={'color': color},
+        )
+        return label, created
+
+
+def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
+    """
+    Synchronize issue metadata into the Issue model and synchronize its labels (M2-T2, M2-T3).
+    
+    Mapping rules:
+    - github_issue_id: issue_data['id'] (immutable unique key)
+    - project: Project foreign key
+    - number: issue_data['number']
+    - title: issue_data.get('title') or ''
+    - status: 'closed' if issue_data.get('state') == 'closed' else 'open'
+    
+    Non-destructive update rule:
+    - If Issue exists: updates mutable GitHub metadata ('title', 'status', 'number', 'project').
+      DOES NOT overwrite operator-customized fields: 'points', 'difficulty', 'category', 'is_featured'.
+    - If Issue is created: uses model defaults (points=50, difficulty='', category='', is_featured=False).
+    
+    Label synchronization (M2-T3):
+    - If 'labels' key is provided in issue_data:
+      - Synchronizes each IssueLabel in database (idempotent / unique on name).
+      - Associates labels with the issue via M:N relationship (issue.labels.set(...)).
+      - Replaces removed labels for this issue without deleting IssueLabel records or affecting other issues.
+    
+    Returns (issue, created: bool).
+    """
+    github_issue_id = issue_data.get('id')
+    if github_issue_id is None:
+        raise GitHubDataError("Missing required 'id' in GitHub issue payload.")
+
+    number = issue_data.get('number')
+    if number is None:
+        raise GitHubDataError("Missing required 'number' in GitHub issue payload.")
+
+    title = issue_data.get('title') or ''
+    github_state = (issue_data.get('state') or 'open').lower()
+    status = 'closed' if github_state == 'closed' else 'open'
+
+    with transaction.atomic():
+        issue = Issue.objects.select_for_update().filter(github_issue_id=github_issue_id).first()
+
+        if issue:
+            updated_fields = []
+            if issue.project_id != project.id:
+                issue.project = project
+                updated_fields.append('project')
+            if issue.number != number:
+                issue.number = number
+                updated_fields.append('number')
+            if issue.title != title:
+                issue.title = title
+                updated_fields.append('title')
+            if issue.status != status:
+                issue.status = status
+                updated_fields.append('status')
+
+            if updated_fields:
+                issue.save(update_fields=updated_fields)
+
+            created = False
+        else:
+            issue = Issue.objects.create(
+                github_issue_id=github_issue_id,
+                project=project,
+                number=number,
+                title=title,
+                status=status,
+            )
+            created = True
+
+        if 'labels' in issue_data:
+            raw_labels = issue_data.get('labels') or []
+            if isinstance(raw_labels, list):
+                label_objects = []
+                for item in raw_labels:
+                    label_obj, _ = sync_label(item)
+                    if label_obj is not None:
+                        label_objects.append(label_obj)
+                issue.labels.set(label_objects)
+
+        return issue, created
+
+
+def sync_issues_for_project(project: Project, issues_data: list[dict]) -> tuple[int, int]:
+    """
+    Synchronize a list of issue payloads for a given project.
+    Returns (created_count, updated_count).
+    """
+    created_count = 0
+    updated_count = 0
+
+    for issue_data in issues_data:
+        # Extra safety check to skip PRs
+        if 'pull_request' in issue_data:
+            continue
+
+        _, created = sync_issue(project, issue_data)
+        if created:
+            created_count += 1
+        else:
+            updated_count += 1
+
+    return created_count, updated_count
+
+
 def sync_repository_by_name(repo_identifier: str, client: GitHubClient | None = None) -> tuple[Project, bool]:
     """
     Fetch repository by 'owner/name' and synchronize into Project table.
@@ -254,3 +499,29 @@ def sync_repository_by_name(repo_identifier: str, client: GitHubClient | None = 
 
     repo_data = client.get_repository(owner, repo)
     return sync_project(repo_data)
+
+
+def sync_repository_and_issues(
+    repo_identifier: str,
+    client: GitHubClient | None = None,
+    sync_issues_flag: bool = True,
+) -> tuple[Project, bool, int, int]:
+    """
+    Fetch and synchronize repository metadata and all its issues.
+    Returns (project, repo_created: bool, issues_created: int, issues_updated: int).
+    """
+    owner, repo = parse_repo_identifier(repo_identifier)
+    if client is None:
+        client = GitHubClient()
+
+    repo_data = client.get_repository(owner, repo)
+    project, repo_created = sync_project(repo_data)
+
+    issues_created = 0
+    issues_updated = 0
+
+    if sync_issues_flag:
+        issues_data = client.get_issues(owner, repo, state='all')
+        issues_created, issues_updated = sync_issues_for_project(project, issues_data)
+
+    return project, repo_created, issues_created, issues_updated

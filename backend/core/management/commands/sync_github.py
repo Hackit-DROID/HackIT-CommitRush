@@ -9,12 +9,12 @@ from core.github_sync import (
     GitHubNetworkError,
     GitHubDataError,
     parse_repo_identifier,
-    sync_project,
+    sync_repository_and_issues,
 )
 
 
 class Command(BaseCommand):
-    help = "Synchronize repository metadata from GitHub REST API into the Project table (M2-T1)."
+    help = "Synchronize repository metadata and issues from GitHub REST API into the Project and Issue tables (M2-T1, M2-T2)."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -23,17 +23,27 @@ class Command(BaseCommand):
             dest='repos',
             help="Repository to synchronize in 'owner/name' format (e.g., --repo owner/name). Can be specified multiple times.",
         )
+        parser.add_argument(
+            '--no-issues',
+            action='store_true',
+            dest='no_issues',
+            default=False,
+            help="Skip synchronizing repository issues (only sync repository metadata).",
+        )
 
     def handle(self, *args, **options):
         repo_inputs = options.get('repos')
+        sync_issues_flag = not options.get('no_issues', False)
 
         if not repo_inputs:
             raise CommandError("At least one repository must be specified using --repo owner/name.")
 
         client = GitHubClient()
-        success_count = 0
-        created_count = 0
-        updated_count = 0
+        success_repos = 0
+        created_repos = 0
+        updated_repos = 0
+        total_issues_created = 0
+        total_issues_updated = 0
         failed_repos = []
 
         for repo_identifier in repo_inputs:
@@ -48,8 +58,11 @@ class Command(BaseCommand):
             self.stdout.write(f"Synchronizing repository '{owner}/{repo}'...")
 
             try:
-                repo_data = client.get_repository(owner, repo)
-                project, created = sync_project(repo_data)
+                project, repo_created, issues_created, issues_updated = sync_repository_and_issues(
+                    f"{owner}/{repo}",
+                    client=client,
+                    sync_issues_flag=sync_issues_flag,
+                )
             except GitHubResourceNotFoundError as e:
                 self.stderr.write(self.style.ERROR(f"Failed to synchronize '{owner}/{repo}': {str(e)}"))
                 failed_repos.append(f"{owner}/{repo}")
@@ -72,25 +85,39 @@ class Command(BaseCommand):
                 self.stderr.write(self.style.ERROR(f"Unexpected error for '{owner}/{repo}': {str(e)}"))
                 failed_repos.append(f"{owner}/{repo}")
             else:
-                success_count += 1
-                if created:
-                    created_count += 1
+                success_repos += 1
+                if repo_created:
+                    created_repos += 1
+                    status_text = "created"
+                else:
+                    updated_repos += 1
+                    status_text = "updated"
+
+                total_issues_created += issues_created
+                total_issues_updated += issues_updated
+
+                if sync_issues_flag:
                     self.stdout.write(
                         self.style.SUCCESS(
-                            f"Successfully created Project '{project.full_name}' (ID: {project.id}, GitHub ID: {project.github_repo_id})."
+                            f"Successfully {status_text} Project '{project.full_name}' (ID: {project.id}, GitHub ID: {project.github_repo_id}). "
+                            f"Issues synced: {issues_created} created, {issues_updated} updated."
                         )
                     )
                 else:
-                    updated_count += 1
                     self.stdout.write(
                         self.style.SUCCESS(
-                            f"Successfully updated Project '{project.full_name}' (ID: {project.id}, GitHub ID: {project.github_repo_id})."
+                            f"Successfully {status_text} Project '{project.full_name}' (ID: {project.id}, GitHub ID: {project.github_repo_id})."
                         )
                     )
 
-        summary_msg = f"Sync complete. Success: {success_count} ({created_count} created, {updated_count} updated), Failed: {len(failed_repos)}."
+        summary_msg = (
+            f"Sync complete. Repositories: {success_repos} ({created_repos} created, {updated_repos} updated), "
+            f"Issues: {total_issues_created + total_issues_updated} ({total_issues_created} created, {total_issues_updated} updated), "
+            f"Failed: {len(failed_repos)}."
+        )
         if failed_repos:
             self.stderr.write(self.style.WARNING(summary_msg))
             raise CommandError(f"Synchronization failed for {len(failed_repos)} repository/repositories: {', '.join(failed_repos)}")
 
         self.stdout.write(self.style.SUCCESS(summary_msg))
+
