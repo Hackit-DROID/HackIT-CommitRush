@@ -134,6 +134,135 @@ export interface ContributionFilters {
   page_size?: number;
 }
 
+// =============================================================================
+// M7 API Interfaces (PRD §8.6, §16, §19, §23)
+// =============================================================================
+
+export interface LeaderboardEntry {
+  rank: number;
+  participant_id: number;
+  github_username: string;
+  avatar_url: string | null;
+  total_points: number;
+  merged_count: number;
+}
+
+export interface LeaderboardMe {
+  rank: number | null;
+  participant_id: number;
+  github_username: string;
+  avatar_url: string | null;
+  total_points: number;
+  merged_count: number;
+}
+
+export interface LeaderboardResponse {
+  count: number;
+  page: number;
+  page_size: number;
+  num_pages: number;
+  frozen: boolean;
+  frozen_at: string | null;
+  results: LeaderboardEntry[];
+  me?: LeaderboardMe | null;
+}
+
+export interface LeaderboardFilters {
+  page?: number;
+  page_size?: number;
+  include_me?: boolean;
+}
+
+export interface DailyUsage {
+  date: string;
+  contributions_count: number;
+  max_contributions: number;
+  points_count: number;
+  max_points: number;
+}
+
+export interface DashboardData {
+  participant: ContributionParticipant;
+  rank: number | null;
+  total_points: number;
+  merged_count: number;
+  daily_usage: DailyUsage;
+  in_progress_contributions: Contribution[];
+  recent_activity: Contribution[];
+}
+
+export interface PublicProfileStats {
+  total_contributions: number;
+  merged_contributions: number;
+  in_progress_contributions: number;
+  rejected_contributions: number;
+}
+
+export interface PublicProfileContribution {
+  id: number;
+  project_name: string;
+  issue_number: number;
+  issue_title: string;
+  points: number;
+  merged_at: string | null;
+  github_url: string;
+}
+
+export interface PublicProfile {
+  id: number;
+  github_id: number;
+  github_username: string;
+  avatar_url: string | null;
+  total_points: number;
+  merged_count: number;
+  rank: number | null;
+  stats: PublicProfileStats;
+  recent_merged_contributions: PublicProfileContribution[];
+}
+
+export interface SystemStatus {
+  merge_paused: boolean;
+  validation_paused: boolean;
+  submissions_paused: boolean;
+  leaderboard_frozen: boolean;
+}
+
+export interface StatsParticipants {
+  total: number;
+  active: number;
+}
+
+export interface StatsPullRequests {
+  total: number;
+  merged: number;
+}
+
+export interface StatsContributions {
+  total: number;
+  by_status: Record<string, number>;
+}
+
+export interface StatsPoints {
+  total_awarded: number;
+  points_past_hour: number;
+}
+
+export interface StatsRates {
+  merges_past_hour: number;
+  points_past_hour: number;
+}
+
+export interface EventStats {
+  event_status: string;
+  system_status: SystemStatus;
+  participants: StatsParticipants;
+  pull_requests: StatsPullRequests;
+  contributions: StatsContributions;
+  points: StatsPoints;
+  rates: StatsRates;
+  updated_at: string;
+}
+
 export class ApiError extends Error {
   status: number;
   data: unknown;
@@ -153,3 +282,4 @@ export class ApiError extends Error {
     return this.status === 404;
   }
 }
+
