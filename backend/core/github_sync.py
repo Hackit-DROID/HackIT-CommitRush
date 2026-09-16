@@ -68,6 +68,16 @@ class GitHubDataError(GitHubSyncError):
     pass
 
 
+class GitHubMergeError(GitHubSyncError):
+    """Raised when GitHub merge operation fails."""
+    pass
+
+
+class GitHubMergeConflictError(GitHubMergeError):
+    """Raised when a pull request cannot be merged due to merge conflict or unmergeable state (HTTP 405/409)."""
+    pass
+
+
 def parse_repo_identifier(repo_identifier: str) -> tuple[str, str]:
     """
     Validate and parse a repository identifier in 'owner/name' format.
@@ -477,6 +487,181 @@ class GitHubClient:
             raise GitHubAPIError(f"GitHub API returned unexpected status {response.status_code}.")
 
         return all_prs
+
+    def get_pull_request(self, owner: str, repo: str, pull_number: int) -> dict:
+        """
+        Fetch a single pull request from GET /repos/{owner}/{repo}/pulls/{pull_number}.
+        Returns PR metadata dict (id, number, merged, merged_at, head, mergeable, mergeable_state, etc.).
+        """
+        if not owner or not repo or not pull_number:
+            raise ValueError("Owner, repository name, and pull_number must be specified.")
+
+        url = f"{self.base_url}/repos/{owner}/{repo}/pulls/{pull_number}"
+        headers = self._get_headers()
+
+        try:
+            response = self.session.get(
+                url,
+                headers=headers,
+                timeout=self.timeout,
+            )
+        except requests.Timeout as e:
+            logger.warning("GitHub API request timed out fetching PR #%s for %s/%s", pull_number, owner, repo)
+            raise GitHubNetworkError(f"GitHub API request timed out after {self.timeout}s.") from e
+        except requests.RequestException as e:
+            logger.warning("GitHub API network failure fetching PR #%s for %s/%s", pull_number, owner, repo)
+            raise GitHubNetworkError("Failed to communicate with GitHub REST API.") from e
+
+        self._record_rate_limit(response)
+
+        if response.status_code == 200:
+            try:
+                data = response.json()
+            except ValueError as e:
+                raise GitHubDataError("Invalid JSON returned by GitHub API.") from e
+
+            if not isinstance(data, dict):
+                raise GitHubDataError("Malformed response payload returned by GitHub API (expected JSON object).")
+
+            return data
+
+        if response.status_code == 404:
+            logger.info("PR #%s on %s/%s not found (HTTP 404)", pull_number, owner, repo)
+            raise GitHubResourceNotFoundError(f"Pull Request #{pull_number} on '{owner}/{repo}' was not found on GitHub (HTTP 404).")
+
+        if response.status_code == 401:
+            logger.warning("GitHub authentication failed for %s/%s (HTTP 401)", owner, repo)
+            raise GitHubAuthenticationError("GitHub API authentication failed (HTTP 401). Verify GITHUB_API_TOKEN configuration.")
+
+        if response.status_code == 403:
+            rate_remaining = response.headers.get('X-RateLimit-Remaining')
+            if rate_remaining == '0':
+                logger.warning("GitHub API rate limit reached (HTTP 403)")
+                raise GitHubRateLimitError(
+                    "GitHub API rate limit exceeded (HTTP 403).",
+                    remaining=0,
+                    limit=self.last_rate_limit.get('limit'),
+                    reset_timestamp=self.last_rate_limit.get('reset'),
+                    retry_after=self.last_rate_limit.get('retry_after'),
+                )
+            logger.warning("GitHub API permission denied or rate limited (HTTP 403) for %s/%s", owner, repo)
+            raise GitHubAuthenticationError(f"GitHub API permission denied or rate limited (HTTP 403) for '{owner}/{repo}'.")
+
+        if response.status_code == 429:
+            logger.warning("GitHub API rate limit reached (HTTP 429)")
+            raise GitHubRateLimitError(
+                "GitHub API rate limit reached (HTTP 429).",
+                remaining=self.last_rate_limit.get('remaining'),
+                limit=self.last_rate_limit.get('limit'),
+                reset_timestamp=self.last_rate_limit.get('reset'),
+                retry_after=self.last_rate_limit.get('retry_after'),
+            )
+
+        if response.status_code >= 500:
+            logger.warning("GitHub API server error HTTP %s for %s/%s PR #%s", response.status_code, owner, repo, pull_number)
+            raise GitHubAPIError(f"GitHub API server error (HTTP {response.status_code}).")
+
+        raise GitHubAPIError(f"GitHub API returned unexpected status {response.status_code}.")
+
+    def merge_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        pull_number: int,
+        commit_title: str | None = None,
+        commit_message: str | None = None,
+        merge_method: str = 'merge',
+        sha: str | None = None,
+    ) -> dict:
+        """
+        Merge a pull request via PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge.
+        Returns merge result dict (sha, merged, message).
+        Raises GitHubMergeConflictError on 405 (not mergeable) or 409 (conflict).
+        """
+        if not owner or not repo or not pull_number:
+            raise ValueError("Owner, repository name, and pull_number must be specified.")
+
+        url = f"{self.base_url}/repos/{owner}/{repo}/pulls/{pull_number}/merge"
+        headers = self._get_headers()
+        payload = {'merge_method': merge_method}
+        if commit_title:
+            payload['commit_title'] = commit_title
+        if commit_message:
+            payload['commit_message'] = commit_message
+        if sha:
+            payload['sha'] = sha
+
+        try:
+            response = self.session.put(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=self.timeout,
+            )
+        except requests.Timeout as e:
+            logger.warning("GitHub API request timed out merging PR #%s for %s/%s", pull_number, owner, repo)
+            raise GitHubNetworkError(f"GitHub API request timed out after {self.timeout}s.") from e
+        except requests.RequestException as e:
+            logger.warning("GitHub API network failure merging PR #%s for %s/%s", pull_number, owner, repo)
+            raise GitHubNetworkError("Failed to communicate with GitHub REST API.") from e
+
+        self._record_rate_limit(response)
+
+        if response.status_code == 200:
+            try:
+                data = response.json()
+            except ValueError as e:
+                raise GitHubDataError("Invalid JSON returned by GitHub API merge endpoint.") from e
+            return data
+
+        if response.status_code in (405, 409):
+            error_message = "Pull request cannot be merged."
+            try:
+                err_data = response.json()
+                if isinstance(err_data, dict) and 'message' in err_data:
+                    error_message = err_data['message']
+            except Exception:
+                pass
+            logger.warning(
+                "GitHub merge conflict / unmergeable PR #%s for %s/%s (HTTP %s): %s",
+                pull_number, owner, repo, response.status_code, error_message,
+            )
+            raise GitHubMergeConflictError(
+                f"PR #{pull_number} on '{owner}/{repo}' cannot be merged (HTTP {response.status_code}): {error_message}"
+            )
+
+        if response.status_code == 404:
+            raise GitHubResourceNotFoundError(f"Pull Request #{pull_number} on '{owner}/{repo}' was not found on GitHub (HTTP 404).")
+
+        if response.status_code == 401:
+            raise GitHubAuthenticationError("GitHub API authentication failed (HTTP 401). Verify GITHUB_API_TOKEN configuration.")
+
+        if response.status_code == 403:
+            rate_remaining = response.headers.get('X-RateLimit-Remaining')
+            if rate_remaining == '0':
+                raise GitHubRateLimitError(
+                    "GitHub API rate limit exceeded (HTTP 403).",
+                    remaining=0,
+                    limit=self.last_rate_limit.get('limit'),
+                    reset_timestamp=self.last_rate_limit.get('reset'),
+                    retry_after=self.last_rate_limit.get('retry_after'),
+                )
+            raise GitHubAuthenticationError(f"GitHub API permission denied or rate limited (HTTP 403) for '{owner}/{repo}'.")
+
+        if response.status_code == 429:
+            raise GitHubRateLimitError(
+                "GitHub API rate limit reached (HTTP 429).",
+                remaining=self.last_rate_limit.get('remaining'),
+                limit=self.last_rate_limit.get('limit'),
+                reset_timestamp=self.last_rate_limit.get('reset'),
+                retry_after=self.last_rate_limit.get('retry_after'),
+            )
+
+        if response.status_code >= 500:
+            logger.warning("GitHub API server error HTTP %s merging PR #%s for %s/%s", response.status_code, pull_number, owner, repo)
+            raise GitHubAPIError(f"GitHub API server error (HTTP {response.status_code}).")
+
+        raise GitHubMergeError(f"GitHub API merge returned unexpected status {response.status_code}.")
 
 
 def sync_project(repo_data: dict) -> tuple[Project, bool]:

@@ -294,6 +294,10 @@ class Contribution(models.Model):
         default='',
         help_text='Explanation if held for admin review',
     )
+    is_priority = models.BooleanField(
+        default=False,
+        help_text='Admin priority override for merge queue processing (PRD §12.3)',
+    )
     approved_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -323,6 +327,7 @@ class Contribution(models.Model):
         indexes = [
             models.Index(fields=['status'], name='contrib_status_idx'),
             models.Index(fields=['issue'], name='contrib_issue_idx'),
+            models.Index(fields=['-is_priority', 'approved_at', 'id'], name='contrib_merge_prio_idx'),
         ]
 
     def __str__(self):
