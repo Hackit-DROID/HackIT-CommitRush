@@ -1,7 +1,13 @@
 from django.urls import path
+from core.api_views import (
+    IssueDetailView,
+    IssueListView,
+    ProjectDetailView,
+    ProjectListView,
+)
 from core.auth_views import (
-    github_login_view,
     github_callback_view,
+    github_login_view,
     logout_view,
     me_view,
 )
@@ -13,4 +19,9 @@ urlpatterns = [
     path('auth/github/callback/', github_callback_view, name='github-callback'),
     path('auth/logout/', logout_view, name='auth-logout'),
     path('auth/me/', me_view, name='auth-me'),
+    # M3 Core Read APIs (PRD §16, Plan M3-T1, M3-T2, M3-T3, M3-T4)
+    path('projects/', ProjectListView.as_view(), name='project-list'),
+    path('projects/<path:slug>/', ProjectDetailView.as_view(), name='project-detail'),
+    path('issues/', IssueListView.as_view(), name='issue-list'),
+    path('issues/<int:pk>/', IssueDetailView.as_view(), name='issue-detail'),
 ]
