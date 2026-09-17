@@ -23,6 +23,7 @@ export async function apiRequest<T>(
     headers: {
       Accept: 'application/json',
     },
+    credentials: 'include',
   });
 
   if (!response.ok) {

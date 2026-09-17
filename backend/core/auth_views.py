@@ -212,3 +212,33 @@ def me_view(request):
         }
 
     return JsonResponse(data, status=200)
+
+
+def dev_login_view(request):
+    """
+    GET /auth/dev-login/?username=sarah_dev&next=/dashboard
+    Development convenience endpoint to quickly establish a session for local testing.
+    Strictly disabled when settings.DEBUG is False.
+    """
+    if not getattr(settings, 'DEBUG', False):
+        return JsonResponse({'error': 'Dev login is disabled in production environments.'}, status=403)
+
+    if request.method != 'GET':
+        return HttpResponseNotAllowed(['GET'])
+
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    username = request.GET.get('username', 'sarah_dev')
+    user = User.objects.filter(username=username).first()
+    if not user:
+        user = User.objects.first()
+
+    if user:
+        login(request, user)
+        next_url = request.GET.get('next', '/dashboard')
+        if next_url.startswith('/'):
+            frontend_base = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
+            next_url = f"{frontend_base.rstrip('/')}{next_url}"
+        return HttpResponseRedirect(next_url)
+
+    return JsonResponse({'error': 'No user found to login.'}, status=404)

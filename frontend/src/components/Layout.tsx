@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { ServiceStatusBanner } from './ServiceStatusBanner';
+import { useCurrentUser } from '../api/auth';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -8,6 +9,7 @@ interface LayoutProps {
 
 export function Layout({ children }: LayoutProps) {
   const location = useLocation();
+  const { data: user } = useCurrentUser();
 
   const isIssuesActive =
     location.pathname === '/' ||
@@ -112,8 +114,70 @@ export function Layout({ children }: LayoutProps) {
             </nav>
           </div>
 
-          <div className="flex items-center space-x-3 text-xs text-slate-400">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/60 border border-emerald-800/50 text-emerald-400 font-mono">
+          <div className="flex items-center space-x-3 text-xs">
+            {user?.is_authenticated ? (
+              <div className="flex items-center space-x-2 bg-slate-800/90 border border-slate-700/80 rounded-lg p-1.5 px-2.5 shadow-sm">
+                {user.avatar_url ? (
+                  <img
+                    src={user.avatar_url}
+                    alt={user.github_username}
+                    className="w-6 h-6 rounded-full border border-slate-600 object-cover"
+                  />
+                ) : (
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-white text-[10px] ${user.is_staff ? 'bg-amber-600' : 'bg-cyan-600'}`}>
+                    {user.github_username.charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <div className="flex flex-col text-left mr-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-semibold text-slate-200 text-xs leading-none">
+                      {user.github_username}
+                    </span>
+                    {user.is_staff && (
+                      <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-medium">
+                        Staff
+                      </span>
+                    )}
+                  </div>
+                  {!user.is_staff && (
+                    <span className="text-[10px] text-cyan-400 font-mono leading-tight">
+                      {user.total_points} pts
+                    </span>
+                  )}
+                </div>
+
+                <select
+                  value={user.github_username}
+                  onChange={(e) => {
+                    window.location.href = `/api/v1/auth/dev-login/?username=${e.target.value}&next=${window.location.pathname}`;
+                  }}
+                  className="bg-slate-900 border border-slate-700 text-slate-300 text-[11px] rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-cyan-500 cursor-pointer"
+                  title="Switch User Account"
+                >
+                  <option value="sarah_dev">sarah_dev (Rank #1)</option>
+                  <option value="alex_builder">alex_builder (Rank #2)</option>
+                  <option value="elena_rust">elena_rust (Rank #3)</option>
+                  <option value="admin">admin (Staff / Ops)</option>
+                </select>
+              </div>
+            ) : (
+              <div className="flex items-center space-x-1.5">
+                <a
+                  href={`/api/v1/auth/dev-login/?username=sarah_dev&next=${window.location.pathname}`}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-medium shadow-sm transition-all text-xs"
+                >
+                  Sign in (sarah_dev)
+                </a>
+                <a
+                  href={`/api/v1/auth/dev-login/?username=admin&next=${window.location.pathname}`}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 font-medium shadow-sm transition-all text-xs"
+                >
+                  Admin (Ops)
+                </a>
+              </div>
+            )}
+
+            <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/60 border border-emerald-800/50 text-emerald-400 font-mono">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               Live Sync
             </span>

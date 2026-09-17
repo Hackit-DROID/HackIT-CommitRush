@@ -14,6 +14,7 @@ from core.api_views import (
     OpsMetricsView,
 )
 from core.auth_views import (
+    dev_login_view,
     github_callback_view,
     github_login_view,
     logout_view,
@@ -24,6 +25,7 @@ from core.webhook_views import github_webhook_view
 
 urlpatterns = [
     path('health/', health_view, name='health'),
+    path('auth/dev-login/', dev_login_view, name='dev-login'),
     path('auth/github/login/', github_login_view, name='github-login'),
     path('auth/github/callback/', github_callback_view, name='github-callback'),
     path('auth/logout/', logout_view, name='auth-logout'),

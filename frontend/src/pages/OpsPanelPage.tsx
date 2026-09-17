@@ -42,14 +42,24 @@ export default function OpsPanelPage() {
             ? 'Access to the Operations Control Panel is restricted to event administrators and staff accounts.'
             : 'Unable to connect to the operational telemetry backend.'}
         </p>
-        <div className="flex justify-center gap-3">
+        <div className="flex flex-wrap justify-center gap-3">
           {isForbidden ? (
-            <a
-              href="/admin/"
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              Log in to Django Admin
-            </a>
+            <>
+              <a
+                href="/api/v1/auth/dev-login/?username=admin&next=/ops"
+                className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-sm font-medium rounded-lg transition-all shadow-md"
+              >
+                Switch to Admin Account
+              </a>
+              <a
+                href="http://127.0.0.1:8000/admin/"
+                target="_blank"
+                rel="noreferrer"
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-lg transition-colors border border-slate-700"
+              >
+                Log in to Django Admin
+              </a>
+            </>
           ) : (
             <button
               onClick={() => refetch()}

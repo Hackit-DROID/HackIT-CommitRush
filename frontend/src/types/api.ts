@@ -289,6 +289,18 @@ export interface OpsMetrics {
   generated_at: string;
 }
 
+export interface CurrentUser {
+  id: number | null;
+  user_id: number;
+  github_id: number | null;
+  github_username: string;
+  avatar_url: string | null;
+  is_suspended: boolean;
+  total_points: number;
+  is_staff: boolean;
+  is_authenticated: boolean;
+}
+
 export class ApiError extends Error {
   status: number;
   data: unknown;
