@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from core.models import Project, Issue, IssueLabel, Contribution, Participant, PullRequest
+from core.models import Project, Issue, IssueLabel, Contribution, Participant, PullRequest, EventConfig, AuditLog
 
 
 class ProjectListSerializer(serializers.ModelSerializer):
@@ -424,5 +424,215 @@ class OpsMetricsResponseSerializer(serializers.Serializer):
     oldest_queued_item_age_seconds = serializers.IntegerField(read_only=True, allow_null=True)
     last_webhook_received_at = serializers.DateTimeField(read_only=True, allow_null=True)
     generated_at = serializers.DateTimeField(read_only=True)
+
+
+# =============================================================================
+# Admin API Serializers
+# =============================================================================
+
+class AdminSystemControlsSerializer(serializers.ModelSerializer):
+    """
+    Serializer for inspecting and updating EventConfig runtime controls.
+    """
+    reason = serializers.CharField(write_only=True, required=False, allow_blank=True, default='')
+
+    class Meta:
+        model = EventConfig
+        fields = [
+            'event_status',
+            'merge_concurrency',
+            'max_contributions_per_day',
+            'max_points_per_day',
+            'merge_paused',
+            'validation_paused',
+            'submissions_paused',
+            'leaderboard_frozen',
+            'leaderboard_frozen_at',
+            'reason',
+        ]
+        read_only_fields = ['leaderboard_frozen_at']
+
+    def validate_merge_concurrency(self, value):
+        if value < 1 or value > 50:
+            raise serializers.ValidationError("Merge concurrency must be between 1 and 50.")
+        return value
+
+    def validate_max_contributions_per_day(self, value):
+        if value < 1:
+            raise serializers.ValidationError("max_contributions_per_day must be at least 1.")
+        return value
+
+    def validate_max_points_per_day(self, value):
+        if value < 1:
+            raise serializers.ValidationError("max_points_per_day must be at least 1.")
+        return value
+
+    def validate_event_status(self, value):
+        allowed = {'pending', 'active', 'paused', 'ended'}
+        if value.strip().lower() not in allowed:
+            raise serializers.ValidationError(
+                f"Invalid event_status '{value}'. Allowed choices: {', '.join(sorted(allowed))}."
+            )
+        return value.strip().lower()
+
+
+class AdminGitHubSyncRequestSerializer(serializers.Serializer):
+    """
+    Request payload for triggering an administrative GitHub repository sync.
+    """
+    repo = serializers.CharField(
+        required=False,
+        default='Hackit-DROID/Open-Source-Contribution-Drive',
+        allow_blank=True,
+    )
+    sync_issues = serializers.BooleanField(required=False, default=True)
+    async_mode = serializers.BooleanField(required=False, default=False)
+    reason = serializers.CharField(required=False, allow_blank=True, default='Manual admin sync')
+
+    def validate_repo(self, value):
+        cleaned = value.strip()
+        if not cleaned:
+            return 'Hackit-DROID/Open-Source-Contribution-Drive'
+        import re
+        if not re.match(r'^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$', cleaned):
+            raise serializers.ValidationError(f"Invalid repository identifier '{cleaned}'. Format must be 'owner/repo'.")
+        return cleaned
+
+
+class AdminIssueUpdateSerializer(serializers.Serializer):
+    """
+    Strict serializer for administrative updates to issue metadata.
+    Prevents mass assignment of immutable GitHub identifiers.
+    """
+    points = serializers.IntegerField(min_value=0, max_value=10000, required=False)
+    difficulty = serializers.ChoiceField(
+        choices=['beginner', 'intermediate', 'advanced', ''],
+        required=False,
+        allow_blank=True,
+    )
+    category = serializers.ChoiceField(
+        choices=['backend', 'frontend', 'fullstack', 'docs', 'devops', 'design', 'mobile', 'general', ''],
+        required=False,
+        allow_blank=True,
+    )
+    status = serializers.ChoiceField(
+        choices=['open', 'closed', 'disabled'],
+        required=False,
+    )
+    is_featured = serializers.BooleanField(required=False)
+    reason = serializers.CharField(write_only=True, required=False, allow_blank=True, default='')
+
+    def validate(self, attrs):
+        unknown_fields = set(self.initial_data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError(
+                {field: f"Field '{field}' is not allowed for modification." for field in unknown_fields}
+            )
+        if not any(k in attrs for k in ('points', 'difficulty', 'category', 'status', 'is_featured')):
+            raise serializers.ValidationError("At least one modifiable field must be provided.")
+        return attrs
+
+
+class AdminIssueDetailSerializer(serializers.ModelSerializer):
+    """
+    Full administrative detail for a tracked issue, including associated project and labels.
+    """
+    project_full_name = serializers.CharField(source='project.full_name', read_only=True)
+    labels = serializers.SlugRelatedField(many=True, read_only=True, slug_field='name')
+
+    class Meta:
+        model = Issue
+        fields = [
+            'id',
+            'github_issue_id',
+            'project',
+            'project_full_name',
+            'number',
+            'title',
+            'points',
+            'difficulty',
+            'category',
+            'status',
+            'is_featured',
+            'labels',
+            'created_at',
+            'created_by_github_id',
+        ]
+        read_only_fields = [
+            'id',
+            'github_issue_id',
+            'project',
+            'project_full_name',
+            'number',
+            'title',
+            'labels',
+            'created_at',
+            'created_by_github_id',
+        ]
+
+
+class AdminParticipantSuspendSerializer(serializers.Serializer):
+    """
+    Serializer for suspending or reinstating a participant.
+    """
+    is_suspended = serializers.BooleanField(required=True)
+    reason = serializers.CharField(required=True, min_length=3, allow_blank=False)
+
+    def validate_reason(self, value):
+        cleaned = value.strip()
+        if len(cleaned) < 3:
+            raise serializers.ValidationError("A non-empty reason of at least 3 characters is required.")
+        return cleaned
+
+
+class AdminParticipantDetailSerializer(serializers.ModelSerializer):
+    """
+    Detailed administrative view of a participant.
+    """
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.CharField(source='user.email', read_only=True)
+    is_staff = serializers.BooleanField(source='user.is_staff', read_only=True)
+    is_superuser = serializers.BooleanField(source='user.is_superuser', read_only=True)
+
+    class Meta:
+        model = Participant
+        fields = [
+            'id',
+            'user_id',
+            'username',
+            'email',
+            'github_id',
+            'github_username',
+            'avatar_url',
+            'is_suspended',
+            'total_points',
+            'merged_count',
+            'is_staff',
+            'is_superuser',
+        ]
+        read_only_fields = fields
+
+
+class AdminAuditLogSerializer(serializers.ModelSerializer):
+    """
+    Audit log serializer for tracking administrative actions.
+    """
+    actor_username = serializers.CharField(source='actor.username', read_only=True, allow_null=True)
+
+    class Meta:
+        model = AuditLog
+        fields = [
+            'id',
+            'actor',
+            'actor_username',
+            'action',
+            'target_type',
+            'target_id',
+            'details',
+            'created_at',
+        ]
+        read_only_fields = fields
+
 
 

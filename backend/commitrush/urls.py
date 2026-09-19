@@ -14,3 +14,6 @@ urlpatterns = [
     # Versioned API auth endpoints (PRD §16)
     path('api/v1/', include('core.urls')),
 ]
+
+handler404 = 'core.views.custom_404_view'
+

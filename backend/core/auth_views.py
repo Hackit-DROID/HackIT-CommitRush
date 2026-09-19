@@ -150,12 +150,30 @@ def github_callback_view(request):
     ):
         redirect_url = stored_next_url
 
+    # In decoupled architecture, resolve relative frontend routes to FRONTEND_URL
+    if redirect_url in ['/profile', '/dashboard', '/stats', '/contributions', '/']:
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+        if redirect_url in ['/dashboard', '/stats', '/']:
+            redirect_url = f"{frontend_url}/profile"
+        elif redirect_url == '/contributions':
+            redirect_url = f"{frontend_url}/profile?tab=contributions"
+        else:
+            redirect_url = f"{frontend_url}{redirect_url}"
+
     if not redirect_url:
         redirect_url = getattr(
-            settings, 'FRONTEND_AUTH_REDIRECT_URL', 'http://localhost:5173/'
+            settings, 'FRONTEND_AUTH_REDIRECT_URL', 'http://localhost:5173/profile'
         )
 
     return HttpResponseRedirect(redirect_url)
+
+
+def frontend_profile_redirect(request):
+    """
+    Redirects direct GET requests on backend /profile/ to the frontend SPA at FRONTEND_URL/profile.
+    """
+    frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+    return HttpResponseRedirect(f"{frontend_url}/profile")
 
 
 def logout_view(request):
@@ -216,7 +234,7 @@ def me_view(request):
 
 def dev_login_view(request):
     """
-    GET /auth/dev-login/?username=sarah_dev&next=/dashboard
+    GET /auth/dev-login/?username=sarah_dev&next=/profile
     Development convenience endpoint to quickly establish a session for local testing.
     Strictly disabled when settings.DEBUG is False.
     """
@@ -235,7 +253,7 @@ def dev_login_view(request):
 
     if user:
         login(request, user)
-        next_url = request.GET.get('next', '/dashboard')
+        next_url = request.GET.get('next', '/profile')
         if next_url.startswith('/'):
             frontend_base = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
             next_url = f"{frontend_base.rstrip('/')}{next_url}"

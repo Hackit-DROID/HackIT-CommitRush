@@ -16,6 +16,27 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load environment variables from .env if present (local dev)
+def _load_env(env_path: Path):
+    if not env_path.is_file():
+        return
+    try:
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith('#') or '=' not in stripped:
+                    continue
+                k, _, v = stripped.partition('=')
+                k = k.strip()
+                v = v.strip().strip("'\"")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except OSError:
+        pass
+
+_load_env(BASE_DIR / '.env')
+_load_env(BASE_DIR.parent / '.env')
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
@@ -76,6 +97,8 @@ REST_FRAMEWORK = {
         'leaderboard_list': '100/minute',
         'profile_detail': '100/minute',
         'stats_list': '120/minute',
+        'admin_sync': '10/minute',
+        'admin_controls': '60/minute',
     },
 }
 
@@ -122,16 +145,29 @@ WSGI_APPLICATION = 'commitrush.wsgi.application'
 # PostgreSQL is the authoritative application database for CommitRush.
 # Connection parameters are configured via environment variables.
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.environ.get('DB_NAME', 'commitrush'),
-        'USER': os.environ.get('DB_USER', 'commitrush'),
-        'PASSWORD': os.environ.get('DB_PASSWORD', ''),
-        'HOST': os.environ.get('DB_HOST', 'localhost'),
-        'PORT': os.environ.get('DB_PORT', '5432'),
+USE_SQLITE = os.environ.get('USE_SQLITE', 'True').lower() in ('true', '1', 'yes') or os.environ.get('DB_ENGINE') == 'sqlite3'
+
+if USE_SQLITE and not os.environ.get('DB_HOST') and not os.environ.get('DB_NAME'):
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+            'OPTIONS': {
+                'timeout': 60,
+            },
+        }
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': os.environ.get('DB_ENGINE', 'django.db.backends.postgresql'),
+            'NAME': os.environ.get('DB_NAME', 'commitrush'),
+            'USER': os.environ.get('DB_USER', 'commitrush'),
+            'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+            'HOST': os.environ.get('DB_HOST', 'localhost'),
+            'PORT': os.environ.get('DB_PORT', '5432'),
+        }
+    }
 
 
 # Password validation
@@ -199,7 +235,7 @@ GITHUB_WEBHOOK_SECRET = os.environ.get('GITHUB_WEBHOOK_SECRET', '')
 
 # Frontend URLs for OAuth redirects
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
-FRONTEND_AUTH_REDIRECT_URL = os.environ.get('FRONTEND_AUTH_REDIRECT_URL', f'{FRONTEND_URL}/')
+FRONTEND_AUTH_REDIRECT_URL = os.environ.get('FRONTEND_AUTH_REDIRECT_URL', f'{FRONTEND_URL}/profile')
 
 # Session & Cookie Security (PRD §19)
 SESSION_COOKIE_HTTPONLY = True
