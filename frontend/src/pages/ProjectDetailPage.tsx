@@ -2,6 +2,7 @@ import { Link, useParams } from 'react-router-dom';
 import { useProject } from '../api/projects';
 import { ErrorState } from '../components/ErrorState';
 import { ProjectDetailSkeleton } from '../components/Skeletons';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 export function ProjectDetailPage() {
   const params = useParams();
@@ -10,6 +11,13 @@ export function ProjectDetailPage() {
   const slug = decodeURIComponent(rawSlug);
 
   const { data: project, isLoading, isError, error, refetch } = useProject(slug);
+
+  useDocumentTitle(
+    project ? `CommitRush — Project: ${project.name}` : 'CommitRush — Project Details',
+    project
+      ? `Tracked repository details, issue counts, and contribution activity for ${project.full_name}.`
+      : 'View tracked repository details on CommitRush.'
+  );
 
   if (isLoading) {
     return <ProjectDetailSkeleton />;

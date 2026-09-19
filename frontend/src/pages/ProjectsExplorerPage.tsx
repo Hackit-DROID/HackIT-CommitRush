@@ -4,8 +4,14 @@ import { useProjects } from '../api/projects';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorState } from '../components/ErrorState';
 import { ProjectsListSkeleton } from '../components/Skeletons';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 export function ProjectsExplorerPage() {
+  useDocumentTitle(
+    'CommitRush — Projects',
+    'Browse and explore active open-source repositories tracked in CommitRush.'
+  );
+
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [language, setLanguage] = useState('');
@@ -64,6 +70,7 @@ export function ProjectsExplorerPage() {
           <div className="lg:col-span-2 relative">
             <input
               type="text"
+              aria-label="Search repository name or description"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search repo name or description..."
@@ -72,12 +79,13 @@ export function ProjectsExplorerPage() {
             {searchInput && (
               <button
                 type="button"
+                aria-label="Clear search query"
                 onClick={() => {
                   setSearchInput('');
                   setSearchQuery('');
                   setPage(1);
                 }}
-                className="absolute right-3 top-3 text-slate-500 hover:text-slate-300 text-xs"
+                className="absolute right-3 top-3 text-slate-500 hover:text-slate-300 text-xs cursor-pointer"
               >
                 Clear
               </button>
@@ -88,6 +96,7 @@ export function ProjectsExplorerPage() {
           <div>
             <input
               type="text"
+              aria-label="Filter by programming language"
               value={language}
               onChange={(e) => {
                 setLanguage(e.target.value);
@@ -101,6 +110,7 @@ export function ProjectsExplorerPage() {
           {/* Enabled Status Filter */}
           <div>
             <select
+              aria-label="Filter by repository active status"
               value={enabledFilter}
               onChange={(e) => {
                 setEnabledFilter(e.target.value as 'all' | 'true' | 'false');

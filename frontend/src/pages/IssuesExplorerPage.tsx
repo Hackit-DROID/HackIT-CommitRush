@@ -3,8 +3,14 @@ import { useIssues } from '../api/issues';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorState } from '../components/ErrorState';
 import { IssuesListSkeleton } from '../components/Skeletons';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 export function IssuesExplorerPage() {
+  useDocumentTitle(
+    'CommitRush — Issues',
+    'Browse and filter available open-source contribution issues across all tracked repositories.'
+  );
+
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Read filter state from query parameters
@@ -93,6 +99,7 @@ export function IssuesExplorerPage() {
           <div>
             <input
               type="text"
+              aria-label="Filter by project repository"
               value={projectParam}
               onChange={(e) => updateParam('project', e.target.value)}
               placeholder="Filter by Project (repo)..."
@@ -104,6 +111,7 @@ export function IssuesExplorerPage() {
           <div>
             <input
               type="text"
+              aria-label="Filter by programming language"
               value={languageParam}
               onChange={(e) => updateParam('language', e.target.value)}
               placeholder="Language (Python, Rust...)"
@@ -114,6 +122,7 @@ export function IssuesExplorerPage() {
           {/* Difficulty Filter */}
           <div>
             <select
+              aria-label="Filter by difficulty"
               value={difficultyParam}
               onChange={(e) => updateParam('difficulty', e.target.value)}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all"
@@ -128,6 +137,7 @@ export function IssuesExplorerPage() {
           {/* Category Filter */}
           <div>
             <select
+              aria-label="Filter by domain category"
               value={categoryParam}
               onChange={(e) => updateParam('category', e.target.value)}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all"
@@ -143,6 +153,7 @@ export function IssuesExplorerPage() {
           {/* Status Filter */}
           <div>
             <select
+              aria-label="Filter by issue status"
               value={statusParam}
               onChange={(e) => updateParam('status', e.target.value)}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent transition-all"
@@ -158,6 +169,7 @@ export function IssuesExplorerPage() {
             <input
               type="number"
               min="0"
+              aria-label="Minimum points bounty"
               value={pointsMinParam}
               onChange={(e) => updateParam('points_min', e.target.value)}
               placeholder="Min Pts"
@@ -167,6 +179,7 @@ export function IssuesExplorerPage() {
             <input
               type="number"
               min="0"
+              aria-label="Maximum points bounty"
               value={pointsMaxParam}
               onChange={(e) => updateParam('points_max', e.target.value)}
               placeholder="Max Pts"
@@ -177,6 +190,7 @@ export function IssuesExplorerPage() {
           {/* Sort Selector */}
           <div className="sm:col-span-2 lg:col-span-2">
             <select
+              aria-label="Sort issues"
               value={sortParam}
               onChange={(e) => updateParam('sort', e.target.value)}
               className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-transparent font-medium"
@@ -254,11 +268,11 @@ export function IssuesExplorerPage() {
                 key={issue.id}
                 className="bg-slate-900/60 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 rounded-xl p-4 sm:p-5 transition-all duration-150 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm"
               >
-                <div className="space-y-2 flex-1">
+                <div className="space-y-2 flex-1 min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <Link
                       to={`/issues/${issue.id}`}
-                      className="text-base font-semibold text-white hover:text-cyan-400 transition-colors"
+                      className="text-base font-semibold text-white hover:text-cyan-400 transition-colors break-words"
                     >
                       {issue.title}
                     </Link>

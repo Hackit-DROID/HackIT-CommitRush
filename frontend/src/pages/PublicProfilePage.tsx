@@ -3,10 +3,16 @@ import { usePublicProfile } from '../api/profile';
 import { ApiError } from '../types/api';
 import { ErrorState } from '../components/ErrorState';
 import { ProfileSkeleton } from '../components/Skeletons';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 export function PublicProfilePage() {
   const { username } = useParams<{ username: string }>();
   const { data, isLoading, isError, error, refetch } = usePublicProfile(username);
+
+  useDocumentTitle(
+    username ? `CommitRush — @${username}'s Profile` : 'CommitRush — Contributor Profile',
+    'Public contributor profile, merged pull requests, and rank standings on CommitRush.'
+  );
 
   if (isLoading) {
     return (
@@ -82,7 +88,11 @@ export function PublicProfilePage() {
             <img
               src={avatar_url}
               alt={github_username}
-              className="w-20 h-20 rounded-2xl border-2 border-indigo-500/60 bg-slate-800 object-cover shadow-lg"
+              width="80"
+              height="80"
+              loading="eager"
+              decoding="async"
+              className="w-20 h-20 rounded-full border-2 border-indigo-500/60 bg-slate-800 object-cover shadow-lg shadow-indigo-950/40"
             />
           ) : (
             <div className="w-20 h-20 rounded-2xl border-2 border-indigo-500/60 bg-slate-800 flex items-center justify-center font-black text-2xl text-white shadow-lg">
@@ -106,8 +116,8 @@ export function PublicProfilePage() {
         </div>
 
         {/* Highlight Stats */}
-        <div className="flex items-center gap-3 w-full sm:w-auto justify-center sm:justify-end flex-wrap">
-          <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-3.5 text-center min-w-[100px]">
+        <div className="flex items-center gap-2.5 sm:gap-3 w-full sm:w-auto justify-center sm:justify-end">
+          <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-3 sm:p-3.5 text-center min-w-0 sm:min-w-[100px] flex-1 sm:flex-initial">
             <span className="text-[10px] uppercase font-mono tracking-wider text-slate-500 block mb-1">
               Global Rank
             </span>
@@ -116,7 +126,7 @@ export function PublicProfilePage() {
             </span>
           </div>
 
-          <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-3.5 text-center min-w-[100px]">
+          <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-3 sm:p-3.5 text-center min-w-0 sm:min-w-[100px] flex-1 sm:flex-initial">
             <span className="text-[10px] uppercase font-mono tracking-wider text-slate-500 block mb-1">
               Total Points
             </span>
@@ -125,7 +135,7 @@ export function PublicProfilePage() {
             </span>
           </div>
 
-          <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-3.5 text-center min-w-[100px]">
+          <div className="bg-slate-950/80 border border-slate-800/80 rounded-2xl p-3 sm:p-3.5 text-center min-w-0 sm:min-w-[100px] flex-1 sm:flex-initial">
             <span className="text-[10px] uppercase font-mono tracking-wider text-slate-500 block mb-1">
               Merged PRs
             </span>

@@ -2,10 +2,18 @@ import { Link, useParams } from 'react-router-dom';
 import { useIssue } from '../api/issues';
 import { ErrorState } from '../components/ErrorState';
 import { IssueDetailSkeleton } from '../components/Skeletons';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 export function IssueDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: issue, isLoading, isError, error, refetch } = useIssue(id);
+
+  useDocumentTitle(
+    issue ? `CommitRush — Issue #${issue.github_number}: ${issue.title}` : 'CommitRush — Issue Details',
+    issue
+      ? `View details and bounties for issue #${issue.github_number} (${issue.title}) on CommitRush.`
+      : 'View open-source issue details and reward points on CommitRush.'
+  );
 
   if (isLoading) {
     return <IssueDetailSkeleton />;
@@ -54,10 +62,10 @@ export function IssueDetailPage() {
       </div>
 
       {/* Main Issue Card */}
-      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-6 sm:p-8 space-y-6 shadow-sm">
+      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 sm:p-8 space-y-6 shadow-sm">
         {/* Header and Title */}
         <div className="space-y-3">
-          <div className="flex items-center gap-2 text-xs font-mono text-slate-400">
+          <div className="flex items-center gap-2 text-xs font-mono text-slate-400 flex-wrap">
             <Link
               to={`/projects/${encodeURIComponent(issue.project)}`}
               className="text-cyan-400 hover:underline font-semibold"
@@ -68,7 +76,7 @@ export function IssueDetailPage() {
             <span>Issue #{issue.github_number}</span>
           </div>
 
-          <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight leading-tight">
+          <h1 className="text-xl sm:text-3xl font-bold text-white tracking-tight leading-tight break-words">
             {issue.title}
           </h1>
         </div>

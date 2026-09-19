@@ -4,8 +4,14 @@ import { useLeaderboard } from '../api/leaderboard';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorState } from '../components/ErrorState';
 import { LeaderboardSkeleton } from '../components/Skeletons';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 export function LeaderboardPage() {
+  useDocumentTitle(
+    'CommitRush — Leaderboard',
+    'Real-time standings of open source contributors across all tracked repositories.'
+  );
+
   const [page, setPage] = useState(1);
   const pageSize = 50;
 
@@ -119,7 +125,11 @@ export function LeaderboardPage() {
               <img
                 src={me.avatar_url}
                 alt={me.github_username}
-                className="w-12 h-12 rounded-full border-2 border-indigo-500/60 bg-slate-800"
+                width="48"
+                height="48"
+                loading="lazy"
+                decoding="async"
+                className="w-12 h-12 rounded-full border-2 border-indigo-500/60 bg-slate-800 object-cover"
               />
             ) : (
               <div className="w-12 h-12 rounded-full border-2 border-indigo-500/60 bg-slate-800 flex items-center justify-center font-bold text-white">
@@ -206,6 +216,10 @@ export function LeaderboardPage() {
                             <img
                               src={entry.avatar_url}
                               alt={entry.github_username}
+                              width="36"
+                              height="36"
+                              loading="lazy"
+                              decoding="async"
                               className="w-9 h-9 rounded-full border border-slate-700 bg-slate-800 object-cover"
                             />
                           ) : (
