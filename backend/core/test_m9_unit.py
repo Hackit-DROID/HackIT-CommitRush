@@ -396,14 +396,14 @@ class M9T1PermissionsUnitTests(TestCase):
         resp_mine = self.client.get(reverse('my-contributions-list'))
         self.assertIn(resp_mine.status_code, [401, 403])
 
-        resp_ops = self.client.get(reverse('ops-metrics'))
+        resp_ops = self.client.get(reverse('admin-metrics'))
         self.assertIn(resp_ops.status_code, [401, 403])
 
     def test_non_staff_user_blocked_from_admin_and_ops_endpoints(self):
         """Normal participants cannot access Ops metrics or Admin points adjustment."""
         self.client.force_login(self.normal_user)
 
-        resp_ops = self.client.get(reverse('ops-metrics'))
+        resp_ops = self.client.get(reverse('admin-metrics'))
         self.assertEqual(resp_ops.status_code, 403)
 
         resp_adjust = self.client.post(
@@ -417,5 +417,5 @@ class M9T1PermissionsUnitTests(TestCase):
         """Staff user receives 200 OK from Ops metrics endpoint."""
         self.client.force_login(self.staff_user)
 
-        resp_ops = self.client.get(reverse('ops-metrics'))
+        resp_ops = self.client.get(reverse('admin-metrics'))
         self.assertEqual(resp_ops.status_code, 200)

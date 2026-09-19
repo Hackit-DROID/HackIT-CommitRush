@@ -136,7 +136,7 @@ class M9T5SecurityAuditingTests(TestCase):
             ('/contributions/mine/', 401),
             ('/auth/me/', 401),
             ('/api/v1/admin/points/adjust/', 401),
-            ('/ops/metrics/', 401),
+            ('/api/v1/admin/metrics/', 401),
         ]
         for url, expected_code in endpoints:
             resp = self.client.get(url) if 'adjust' not in url else self.client.post(url, {})
@@ -151,7 +151,7 @@ class M9T5SecurityAuditingTests(TestCase):
 
         admin_endpoints = [
             ('POST', '/api/v1/admin/points/adjust/', {'participant_id': self.bob.id, 'points': 50, 'reason': 'Audit'}),
-            ('GET', '/ops/metrics/', None),
+            ('GET', '/api/v1/admin/metrics/', None),
         ]
 
         for method, url, body in admin_endpoints:
@@ -177,7 +177,7 @@ class M9T5SecurityAuditingTests(TestCase):
         self.assertEqual(resp.status_code, 200)
 
         # Admin Ops Metrics
-        resp_ops = self.client.get('/ops/metrics/')
+        resp_ops = self.client.get('/api/v1/admin/metrics/')
         self.assertEqual(resp_ops.status_code, 200)
         self.assertIn('event_status', resp_ops.data)
 

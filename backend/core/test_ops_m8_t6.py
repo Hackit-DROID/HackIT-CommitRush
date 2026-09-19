@@ -80,12 +80,12 @@ class OpsMetricsM8T6Tests(TestCase):
     def test_anonymous_and_non_staff_users_cannot_access_ops_metrics(self):
         """Public or non-staff users cannot access /ops/metrics/."""
         # Anonymous
-        resp_anon = self.client.get(reverse('ops-metrics'))
+        resp_anon = self.client.get(reverse('admin-metrics'))
         self.assertIn(resp_anon.status_code, [401, 403])
 
         # Non-staff authenticated
         self.client.force_login(self.normal_user)
-        resp_user = self.client.get(reverse('ops-metrics'))
+        resp_user = self.client.get(reverse('admin-metrics'))
         self.assertEqual(resp_user.status_code, 403)
 
     def test_staff_user_receives_complete_ops_metrics(self):
@@ -120,7 +120,7 @@ class OpsMetricsM8T6Tests(TestCase):
             payload={'action': 'opened'},
         )
 
-        resp = self.client.get(reverse('ops-metrics'))
+        resp = self.client.get(reverse('admin-metrics'))
         self.assertEqual(resp.status_code, 200)
 
         data = resp.json()

@@ -1,9 +1,11 @@
 import logging
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import exceptions, generics, permissions, status
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
@@ -11,8 +13,12 @@ from rest_framework.settings import api_settings
 from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from rest_framework.views import APIView
 
+from core.github_sync import (
+    DEFAULT_MONOREPO,
+    GitHubSyncError,
+    sync_repository_and_issues,
+)
 from core.leaderboard import calculate_participant_rank, fetch_leaderboard_data, invalidate_leaderboard_cache
-from core.stats import fetch_event_stats
 from core.models import (
     AuditLog,
     Contribution,
@@ -26,7 +32,14 @@ from core.models import (
 )
 from core.semaphore import RedisMergeSemaphore
 from core.serializers import (
+    AdminAuditLogSerializer,
+    AdminGitHubSyncRequestSerializer,
+    AdminIssueDetailSerializer,
+    AdminIssueUpdateSerializer,
+    AdminParticipantDetailSerializer,
+    AdminParticipantSuspendSerializer,
     AdminPointAdjustmentSerializer,
+    AdminSystemControlsSerializer,
     ContributionSerializer,
     DashboardSerializer,
     EventStatsSerializer,
@@ -38,6 +51,8 @@ from core.serializers import (
     ProjectListSerializer,
     PublicProfileSerializer,
 )
+from core.stats import fetch_event_stats
+from core.tasks import sync_repository_task
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +159,33 @@ class StatsUserRateThrottle(DynamicRateMixin, UserRateThrottle):
             'scope': self.scope,
             'ident': request.user.pk
         }
+
+
+class AdminSyncRateThrottle(DynamicRateMixin, UserRateThrottle):
+    """Authenticated administrator rate throttle for triggering GitHub sync (PRD §13.6)."""
+    scope = 'admin_sync'
+
+    def get_cache_key(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return None
+        return self.cache_format % {
+            'scope': self.scope,
+            'ident': request.user.pk
+        }
+
+
+class AdminControlsRateThrottle(DynamicRateMixin, UserRateThrottle):
+    """Authenticated administrator rate throttle for modifying system controls."""
+    scope = 'admin_controls'
+
+    def get_cache_key(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return None
+        return self.cache_format % {
+            'scope': self.scope,
+            'ident': request.user.pk
+        }
+
 
 
 
@@ -436,6 +478,31 @@ class IssueDetailView(generics.RetrieveAPIView):
 # Contribution Status APIs (PRD §16, §19, Plan M5-T4)
 # =============================================================================
 
+class AdminSessionAuthentication(SessionAuthentication):
+    """
+    Session authentication for administrator API endpoints that supplies a
+    'Session realm="admin"' WWW-Authenticate challenge header upon authentication
+    failure, ensuring DRF emits HTTP 401 Unauthorized rather than coercing to 403.
+    """
+    def authenticate_header(self, request):
+        return 'Session realm="admin"'
+
+
+class IsAdministrator(permissions.BasePermission):
+    """
+    Authoritative server-side administrator authorization.
+    - If user is not authenticated: raises NotAuthenticated (HTTP 401 Unauthorized).
+    - If user is authenticated but not staff/superuser: raises PermissionDenied (HTTP 403 Forbidden).
+    - If user is authenticated and staff/superuser: returns True.
+    """
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            raise exceptions.NotAuthenticated("Authentication credentials were not provided.")
+        if not (request.user.is_staff or request.user.is_superuser):
+            raise exceptions.PermissionDenied("Administrator privileges are required to perform this action.")
+        return True
+
+
 class IsOwnerOrAdmin(permissions.BasePermission):
     """
     Object-level permission allowing only the contribution owner or admin/staff to view.
@@ -527,7 +594,8 @@ class AdminPointAdjustmentView(APIView):
     - Immutable PointTransaction ledger entry (status='ADMIN_ADJUST').
     - AuditLog audit trail creation.
     """
-    permission_classes = [permissions.IsAdminUser]
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
 
     def post(self, request):
         serializer = AdminPointAdjustmentSerializer(data=request.data)
@@ -864,12 +932,13 @@ class EventStatsView(APIView):
 
 class OpsMetricsView(APIView):
     """
-    M8-T6: GET /api/v1/ops/metrics/
+    M8-T6: GET /api/v1/ops/metrics/ or /api/v1/admin/metrics/
     Operator dashboard metrics endpoint (PRD §12.6, §18, Plan M8-T6).
     Restricted to staff/admin users (permissions.IsAdminUser).
     Zero synchronous GitHub calls.
     """
-    permission_classes = [permissions.IsAdminUser]
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
 
     def get(self, request):
         config = EventConfig.get_solo()
@@ -926,5 +995,401 @@ class OpsMetricsView(APIView):
 
         serializer = OpsMetricsResponseSerializer(data)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+AdminOpsMetricsView = OpsMetricsView
+
+
+# =============================================================================
+# Admin-Only API Layer
+# =============================================================================
+
+class AdminSystemControlsView(APIView):
+    """
+    GET, PATCH, POST /api/v1/admin/controls/
+    Administrative controls for event lifecycle, concurrency, and emergency circuit breakers.
+    Enforces server-side authentication (IsAuthenticated) and administrator authorization (IsAdminUser).
+    Audit trail recorded in AuditLog for all state mutations.
+    """
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
+    throttle_classes = [AdminControlsRateThrottle]
+
+    def get(self, request):
+        config = EventConfig.get_solo()
+        serializer = AdminSystemControlsSerializer(config)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        config = EventConfig.get_solo()
+        serializer = AdminSystemControlsSerializer(config, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        previous_values = {
+            k: getattr(config, k)
+            for k in serializer.validated_data.keys()
+            if k != 'reason'
+        }
+        reason = serializer.validated_data.pop('reason', '') or request.data.get('reason', '')
+
+        with transaction.atomic():
+            updated_config = serializer.save()
+            new_values = {
+                k: getattr(updated_config, k)
+                for k in previous_values.keys()
+            }
+
+            AuditLog.objects.create(
+                actor=request.user,
+                action='admin_update_system_controls',
+                target_type='EventConfig',
+                target_id=str(updated_config.id),
+                details={
+                    'previous': previous_values,
+                    'updated': new_values,
+                    'reason': reason,
+                },
+            )
+
+        logger.info(
+            "Admin %s updated EventConfig controls: %s (reason: '%s')",
+            request.user.username,
+            new_values,
+            reason,
+        )
+        return Response(AdminSystemControlsSerializer(updated_config).data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        return self.patch(request)
+
+
+class AdminGitHubSyncView(APIView):
+    """
+    POST /api/v1/admin/github/sync/
+    Triggers repository and issue synchronization from the upstream GitHub repository.
+    Enforces server-side authentication, staff authorization, rate limiting, and concurrency debounce.
+    """
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
+    throttle_classes = [AdminSyncRateThrottle]
+
+    def post(self, request):
+        serializer = AdminGitHubSyncRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        repo_identifier = serializer.validated_data.get('repo') or DEFAULT_MONOREPO
+        sync_issues = serializer.validated_data.get('sync_issues', True)
+        async_mode = serializer.validated_data.get('async_mode', False)
+        reason = serializer.validated_data.get('reason', 'Manual admin sync')
+
+        # Concurrency / debounce protection
+        lock_key = f"commitrush:lock:admin_sync:{repo_identifier}"
+        acquired = cache.add(lock_key, request.user.id, timeout=15)
+        if not acquired:
+            return Response(
+                {
+                    'status': 'conflict',
+                    'error': f"A sync operation for '{repo_identifier}' is currently in progress or was triggered within the last 15 seconds. Please wait before retrying.",
+                    'repo': repo_identifier,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        try:
+            if async_mode:
+                task = sync_repository_task.delay(repo_identifier, sync_issues=sync_issues)
+                task_id = task.id
+                AuditLog.objects.create(
+                    actor=request.user,
+                    action='admin_github_sync_dispatched',
+                    target_type='Repository',
+                    target_id=repo_identifier,
+                    details={
+                        'repo': repo_identifier,
+                        'sync_issues': sync_issues,
+                        'async': True,
+                        'task_id': task_id,
+                        'reason': reason,
+                    },
+                )
+                return Response(
+                    {
+                        'status': 'enqueued',
+                        'task_id': task_id,
+                        'repo': repo_identifier,
+                        'sync_issues': sync_issues,
+                    },
+                    status=status.HTTP_202_ACCEPTED,
+                )
+
+            # Synchronous execution
+            project, repo_created, issues_created, issues_updated = sync_repository_and_issues(
+                repo_identifier=repo_identifier,
+                sync_issues_flag=sync_issues,
+            )
+
+            AuditLog.objects.create(
+                actor=request.user,
+                action='admin_github_sync_completed',
+                target_type='Project',
+                target_id=str(project.id),
+                details={
+                    'repo': repo_identifier,
+                    'repo_created': repo_created,
+                    'issues_created': issues_created,
+                    'issues_updated': issues_updated,
+                    'reason': reason,
+                },
+            )
+
+            return Response(
+                {
+                    'status': 'completed',
+                    'project': {
+                        'id': project.id,
+                        'full_name': project.full_name,
+                        'created': repo_created,
+                    },
+                    'issues_created': issues_created,
+                    'issues_updated': issues_updated,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except GitHubSyncError as exc:
+            logger.error("Admin GitHub sync failed for '%s': %s", repo_identifier, str(exc))
+            AuditLog.objects.create(
+                actor=request.user,
+                action='admin_github_sync_failed',
+                target_type='Repository',
+                target_id=repo_identifier,
+                details={
+                    'error': str(exc),
+                    'reason': reason,
+                },
+            )
+            return Response(
+                {
+                    'status': 'failed',
+                    'error': str(exc),
+                    'repo': repo_identifier,
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        finally:
+            if not async_mode:
+                cache.delete(lock_key)
+
+
+class AdminIssuePagination(PageNumberPagination):
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class AdminIssueListView(generics.ListAPIView):
+    """
+    GET /api/v1/admin/issues/
+    Administrative issue listing with comprehensive filters.
+    """
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
+    serializer_class = AdminIssueDetailSerializer
+    pagination_class = AdminIssuePagination
+
+    def get_queryset(self):
+        qs = Issue.objects.select_related('project').prefetch_related('labels')
+        params = self.request.query_params
+
+        status_param = params.get('status')
+        if status_param:
+            qs = qs.filter(status__iexact=status_param.strip())
+
+        difficulty_param = params.get('difficulty')
+        if difficulty_param:
+            qs = qs.filter(difficulty__iexact=difficulty_param.strip())
+
+        category_param = params.get('category')
+        if category_param:
+            qs = qs.filter(category__iexact=category_param.strip())
+
+        project_param = params.get('project')
+        if project_param:
+            clean_proj = project_param.strip()
+            qs = qs.filter(Q(project__full_name__iexact=clean_proj) | Q(project__name__iexact=clean_proj))
+
+        is_featured_param = params.get('is_featured')
+        if is_featured_param is not None:
+            is_feat = parse_boolean_param(is_featured_param, 'is_featured')
+            if is_feat is not None:
+                qs = qs.filter(is_featured=is_feat)
+
+        return qs.order_by('-id')
+
+
+class AdminIssueDetailView(APIView):
+    """
+    GET, PATCH /api/v1/admin/issues/{id}/
+    Administrative endpoint for viewing and updating CommitRush issue metadata.
+    Enforces strict validation to prevent mass assignment of immutable GitHub identifiers.
+    """
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
+
+    def get(self, request, pk):
+        try:
+            issue = Issue.objects.select_related('project').prefetch_related('labels').get(pk=pk)
+        except Issue.DoesNotExist:
+            raise NotFound(f"Issue with ID {pk} not found.")
+
+        serializer = AdminIssueDetailSerializer(issue)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def patch(self, request, pk):
+        try:
+            issue = Issue.objects.select_related('project').prefetch_related('labels').get(pk=pk)
+        except Issue.DoesNotExist:
+            raise NotFound(f"Issue with ID {pk} not found.")
+
+        serializer = AdminIssueUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        updated_fields = []
+        previous_values = {}
+
+        for field in ('points', 'difficulty', 'category', 'status', 'is_featured'):
+            if field in serializer.validated_data:
+                previous_values[field] = getattr(issue, field)
+                setattr(issue, field, serializer.validated_data[field])
+                updated_fields.append(field)
+
+        reason = serializer.validated_data.get('reason', '') or request.data.get('reason', '')
+
+        with transaction.atomic():
+            if updated_fields:
+                issue.save(update_fields=updated_fields)
+
+            AuditLog.objects.create(
+                actor=request.user,
+                action='admin_update_issue_metadata',
+                target_type='Issue',
+                target_id=str(issue.id),
+                details={
+                    'number': issue.number,
+                    'project': issue.project.full_name,
+                    'previous': previous_values,
+                    'updated': {f: getattr(issue, f) for f in updated_fields},
+                    'reason': reason,
+                },
+            )
+
+        logger.info(
+            "Admin %s updated issue #%d (%s): %s (reason: '%s')",
+            request.user.username,
+            issue.number,
+            issue.project.full_name,
+            updated_fields,
+            reason,
+        )
+
+        return Response(AdminIssueDetailSerializer(issue).data, status=status.HTTP_200_OK)
+
+
+class AdminParticipantDetailView(APIView):
+    """
+    GET /api/v1/admin/participants/{id}/
+    Administrative endpoint for viewing participant profile and suspension status.
+    """
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
+
+    def get(self, request, pk):
+        try:
+            participant = Participant.objects.select_related('user').get(pk=pk)
+        except Participant.DoesNotExist:
+            raise NotFound(f"Participant with ID {pk} not found.")
+
+        serializer = AdminParticipantDetailSerializer(participant)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AdminParticipantModerationView(APIView):
+    """
+    POST /api/v1/admin/participants/{id}/suspend/
+    Administrative endpoint to suspend or reinstate a participant.
+    """
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
+
+    def post(self, request, pk):
+        serializer = AdminParticipantSuspendSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        is_suspended = serializer.validated_data['is_suspended']
+        reason = serializer.validated_data['reason']
+
+        with transaction.atomic():
+            try:
+                participant = Participant.objects.select_for_update().select_related('user').get(pk=pk)
+            except Participant.DoesNotExist:
+                raise NotFound(f"Participant with ID {pk} not found.")
+
+            previous_suspended = participant.is_suspended
+            participant.is_suspended = is_suspended
+            participant.save(update_fields=['is_suspended'])
+
+            action = 'admin_suspend_participant' if is_suspended else 'admin_reinstate_participant'
+            AuditLog.objects.create(
+                actor=request.user,
+                action=action,
+                target_type='Participant',
+                target_id=str(participant.id),
+                details={
+                    'github_username': participant.github_username,
+                    'previous_is_suspended': previous_suspended,
+                    'new_is_suspended': is_suspended,
+                    'reason': reason,
+                },
+            )
+
+        if previous_suspended != is_suspended:
+            invalidate_leaderboard_cache()
+
+        logger.info(
+            "Admin %s set is_suspended=%s for participant %s (reason: '%s')",
+            request.user.username,
+            is_suspended,
+            participant.github_username,
+            reason,
+        )
+
+        return Response(AdminParticipantDetailSerializer(participant).data, status=status.HTTP_200_OK)
+
+
+class AdminAuditLogPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
+class AdminAuditLogListView(generics.ListAPIView):
+    """
+    GET /api/v1/admin/audit-logs/
+    Administrative audit log inspection endpoint.
+    """
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
+    serializer_class = AdminAuditLogSerializer
+    pagination_class = AdminAuditLogPagination
+
+    def get_queryset(self):
+        qs = AuditLog.objects.select_related('actor').order_by('-created_at', '-id')
+        action_param = self.request.query_params.get('action')
+        if action_param:
+            qs = qs.filter(action__iexact=action_param.strip())
+        target_param = self.request.query_params.get('target_type')
+        if target_param:
+            qs = qs.filter(target_type__iexact=target_param.strip())
+        return qs
+
 
 
