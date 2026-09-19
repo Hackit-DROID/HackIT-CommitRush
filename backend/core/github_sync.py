@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 GITHUB_API_BASE_URL = 'https://api.github.com'
 REPO_PATTERN = re.compile(r'^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$')
+DEFAULT_MONOREPO = 'Hackit-DROID/Open-Source-Contribution-Drive'
 
 
 class GitHubSyncError(Exception):
@@ -820,6 +821,83 @@ def sync_label(label_data: dict | str) -> tuple[IssueLabel | None, bool]:
             raise
 
 
+def extract_issue_metadata(issue_data: dict) -> dict:
+    """
+    Extract CommitRush metadata (difficulty, category, points) from GitHub issue labels and body.
+    Supports Open-Source-Contribution-Drive standards:
+    - Labels: 'difficulty:easy', 'difficulty:beginner', 'difficulty:intermediate', 'difficulty:advanced', 'difficulty:master', 'difficulty:expert'
+    - Labels: 'type:security', 'type:bug', 'type:backend', 'type:frontend', 'type:database', etc.
+    - Markdown body: '**Suggested Points:** <int>', '**Difficulty:** <tier>', '**Type:** <type>', '**Area:** <area>'
+    """
+    difficulty = ''
+    category = ''
+    points = None
+
+    # 1. Parse labels
+    raw_labels = issue_data.get('labels') or []
+    for item in raw_labels:
+        label_name = ''
+        if isinstance(item, dict):
+            label_name = item.get('name') or ''
+        elif isinstance(item, str):
+            label_name = item
+
+        label_lower = label_name.strip().lower()
+        if label_lower.startswith('difficulty:'):
+            difficulty = label_lower.split(':', 1)[1].strip()
+        elif label_lower.startswith('type:'):
+            category = label_lower.split(':', 1)[1].strip()
+        elif label_lower.startswith('category:'):
+            category = label_lower.split(':', 1)[1].strip()
+
+    # 2. Parse markdown body if present
+    body = issue_data.get('body') or ''
+    if body and isinstance(body, str):
+        if points is None:
+            pts_match = re.search(r'\*\*Suggested Points:\*\*\s*(\d+)', body, re.IGNORECASE)
+            if pts_match:
+                try:
+                    points = int(pts_match.group(1))
+                except ValueError:
+                    pass
+
+        if not difficulty:
+            diff_match = re.search(r'\*\*Difficulty:\*\*\s*([^\n\r*]+)', body, re.IGNORECASE)
+            if diff_match:
+                difficulty = diff_match.group(1).strip().lower()
+
+        if not category:
+            type_match = re.search(r'\*\*Type:\*\*\s*([^\n\r*]+)', body, re.IGNORECASE)
+            if type_match:
+                category = type_match.group(1).strip().lower()
+            else:
+                area_match = re.search(r'\*\*Area:\*\*\s*([^\n\r*]+)', body, re.IGNORECASE)
+                if area_match:
+                    category = area_match.group(1).strip().lower()
+
+    if points is None:
+        if difficulty:
+            diff_points_map = {
+                'easy': 10,
+                'beginner': 25,
+                'medium': 50,
+                'intermediate': 50,
+                'advanced': 100,
+                'hard': 100,
+                'master': 150,
+                'expert': 150,
+            }
+            points = diff_points_map.get(difficulty, 50)
+        else:
+            points = 50
+
+    return {
+        'difficulty': difficulty,
+        'category': category,
+        'points': points,
+    }
+
+
 def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
     """
     Synchronize issue metadata into the Issue model and synchronize its labels (M2-T2, M2-T3).
@@ -835,7 +913,7 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
     Non-destructive update rule:
     - If Issue exists: updates mutable GitHub metadata ('title', 'status', 'number', 'project').
       DOES NOT overwrite operator-customized fields: 'points', 'difficulty', 'category', 'is_featured'.
-    - If Issue is created: uses model defaults (points=50, difficulty='', category='', is_featured=False).
+    - If Issue is created: populates 'points', 'difficulty', 'category' from GitHub labels/body metadata.
     
     Label synchronization (M2-T3):
     - If 'labels' key is provided in issue_data:
@@ -865,6 +943,8 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
     if isinstance(user_data, dict):
         created_by_github_id = user_data.get('id')
 
+    meta = extract_issue_metadata(issue_data)
+
     with transaction.atomic():
         issue = Issue.objects.select_for_update().filter(github_issue_id=github_issue_id).first()
 
@@ -888,6 +968,13 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
             if created_by_github_id is not None and issue.created_by_github_id != created_by_github_id:
                 issue.created_by_github_id = created_by_github_id
                 updated_fields.append('created_by_github_id')
+            # Populate empty fields non-destructively
+            if not issue.difficulty and meta['difficulty']:
+                issue.difficulty = meta['difficulty']
+                updated_fields.append('difficulty')
+            if not issue.category and meta['category']:
+                issue.category = meta['category']
+                updated_fields.append('category')
 
             if updated_fields:
                 issue.save(update_fields=updated_fields)
@@ -905,6 +992,9 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
                     'number': number,
                     'title': title,
                     'status': status,
+                    'points': meta['points'],
+                    'difficulty': meta['difficulty'],
+                    'category': meta['category'],
                 }
                 if parsed_created_at:
                     create_kwargs['created_at'] = parsed_created_at
@@ -936,6 +1026,12 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
                     if created_by_github_id is not None and issue.created_by_github_id != created_by_github_id:
                         issue.created_by_github_id = created_by_github_id
                         updated_fields.append('created_by_github_id')
+                    if not issue.difficulty and meta['difficulty']:
+                        issue.difficulty = meta['difficulty']
+                        updated_fields.append('difficulty')
+                    if not issue.category and meta['category']:
+                        issue.category = meta['category']
+                        updated_fields.append('category')
 
                     if updated_fields:
                         issue.save(update_fields=updated_fields)

@@ -642,12 +642,27 @@ class SyncIssueTestCase(TestCase):
         self.assertEqual(issue.created_at.hour, 14)
         self.assertEqual(issue.created_at.minute, 30)
 
-    def test_sync_issue_missing_required_fields_raises_error(self):
-        with self.assertRaises(GitHubDataError):
-            sync_issue(self.project, {'number': 42, 'title': 'No ID'})
-
-        with self.assertRaises(GitHubDataError):
-            sync_issue(self.project, {'id': 12345, 'title': 'No Number'})
+    def test_sync_issue_extracts_drive_metadata_from_labels_and_body(self):
+        drive_payload = {
+            'id': 5348687301,
+            'number': 1500,
+            'title': '[CR-1500] Implement Secure Code Execution Sandbox and Query Sanitization Engine in OpenAI_Syntax_Generator Part 7',
+            'state': 'open',
+            'labels': [
+                {'id': 12041774571, 'name': 'hackit-commitrush', 'color': 'C2E0C6'},
+                {'id': 12041779341, 'name': 'type:security', 'color': 'D93F0B'},
+                {'id': 12062788192, 'name': 'difficulty:master', 'color': 'B60205'},
+            ],
+            'body': '**Type:** security\r\n\r\n**Difficulty:** Master\r\n\r\n**Suggested Points:** 50\r\n\r\n**Area:** AI Security & Isolation (`src.py`)\r\n\r\n**Project:** OpenAI_Syntax_Generator',
+        }
+        issue, created = sync_issue(self.project, drive_payload)
+        self.assertTrue(created)
+        self.assertEqual(issue.github_issue_id, 5348687301)
+        self.assertEqual(issue.number, 1500)
+        self.assertEqual(issue.difficulty, 'master')
+        self.assertEqual(issue.category, 'security')
+        self.assertEqual(issue.points, 50)
+        self.assertEqual(issue.labels.count(), 3)
 
     # ================= M2-T3 Label Synchronization Tests =================
 

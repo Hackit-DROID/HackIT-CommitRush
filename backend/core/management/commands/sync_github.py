@@ -1,6 +1,7 @@
 from django.core.management.base import BaseCommand, CommandError
 
 from core.github_sync import (
+    DEFAULT_MONOREPO,
     GitHubClient,
     GitHubSyncError,
     GitHubResourceNotFoundError,
@@ -22,7 +23,7 @@ class Command(BaseCommand):
             '--repo',
             action='append',
             dest='repos',
-            help="Repository to synchronize in 'owner/name' format (e.g., --repo owner/name). Can be specified multiple times.",
+            help=f"Repository to synchronize in 'owner/name' format (defaults to '{DEFAULT_MONOREPO}'). Can be specified multiple times.",
         )
         parser.add_argument(
             '--no-issues',

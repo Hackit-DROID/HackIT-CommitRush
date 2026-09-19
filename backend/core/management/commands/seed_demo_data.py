@@ -1,6 +1,8 @@
 import datetime
+import os
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from core.models import (
@@ -21,9 +23,28 @@ User = get_user_model()
 
 
 class Command(BaseCommand):
-    help = 'Seeds realistic sample data for local frontend/backend preview and testing.'
+    help = (
+        'Seeds realistic sample data for local frontend/backend preview and testing. '
+        'RESTRICTED: Cannot be run in production (DEBUG=False). Production contribution issues '
+        'must originate exclusively via GitHub synchronization from Hackit-DROID/Open-Source-Contribution-Drive.'
+    )
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--force-dev',
+            action='store_true',
+            help='Force execution in non-production environments when DEBUG is False.',
+        )
 
     def handle(self, *args, **options):
+        is_production = not getattr(settings, 'DEBUG', False) or os.environ.get('ENVIRONMENT', '').lower() == 'production' or os.environ.get('DJANGO_ENV', '').lower() == 'production'
+        if is_production and not options.get('force_dev'):
+            raise CommandError(
+                "Execution rejected: seed_demo_data is strictly for local development environments (DEBUG=True). "
+                "In production, contribution issues must originate exclusively via GitHub synchronization from "
+                "Hackit-DROID/Open-Source-Contribution-Drive."
+            )
+
         self.stdout.write(self.style.NOTICE("Seeding CommitRush local demo data..."))
 
         # 1. Ensure Superuser / Admin
@@ -98,6 +119,15 @@ class Command(BaseCommand):
                 'full_name': 'hackit-org/cache-mesh',
                 'description': 'Distributed in-memory consistent hashing cache nodes in C++.',
                 'language': 'C++',
+                'is_enabled': True,
+            },
+            {
+                'github_repo_id': 1354659372,
+                'owner': 'Hackit-DROID',
+                'name': 'Open-Source-Contribution-Drive',
+                'full_name': 'Hackit-DROID/Open-Source-Contribution-Drive',
+                'description': 'The official Open-Source Contribution Drive monorepo containing active contribution tracks and verified community issues.',
+                'language': 'Python',
                 'is_enabled': True,
             },
         ]
@@ -263,6 +293,55 @@ class Command(BaseCommand):
                 'category': 'database',
                 'status': 'closed',
                 'labels': ['performance', 'enhancement'],
+            },
+            # Open-Source-Contribution-Drive Monorepo (Hackit-DROID)
+            {
+                'project': projects['Open-Source-Contribution-Drive'],
+                'github_issue_id': 701,
+                'number': 101,
+                'title': 'Setup monorepo continuous integration and contribution guidelines',
+                'points': 50,
+                'difficulty': 'beginner',
+                'category': 'devops',
+                'status': 'closed',
+                'is_featured': True,
+                'labels': ['good-first-issue', 'documentation'],
+            },
+            {
+                'project': projects['Open-Source-Contribution-Drive'],
+                'github_issue_id': 702,
+                'number': 102,
+                'title': 'Implement API gateway rate limiter middleware',
+                'points': 100,
+                'difficulty': 'intermediate',
+                'category': 'backend',
+                'status': 'open',
+                'is_featured': True,
+                'labels': ['enhancement', 'help-wanted'],
+            },
+            {
+                'project': projects['Open-Source-Contribution-Drive'],
+                'github_issue_id': 703,
+                'number': 103,
+                'title': 'Add real-time leaderboard WebSocket broadcasting pipeline',
+                'points': 150,
+                'difficulty': 'advanced',
+                'category': 'fullstack',
+                'status': 'open',
+                'is_featured': True,
+                'labels': ['enhancement', 'performance'],
+            },
+            {
+                'project': projects['Open-Source-Contribution-Drive'],
+                'github_issue_id': 704,
+                'number': 104,
+                'title': 'Optimize PostgreSQL index throughput for high-concurrency event submissions',
+                'points': 150,
+                'difficulty': 'advanced',
+                'category': 'database',
+                'status': 'open',
+                'is_featured': True,
+                'labels': ['performance', 'security'],
             },
         ]
 
