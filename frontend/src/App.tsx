@@ -1,19 +1,19 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/Layout';
+import { RootGate } from './components/RootGate';
+import { ProtectedRoute } from './components/ProtectedRoute';
 import { IssuesExplorerPage } from './pages/IssuesExplorerPage';
 import { IssueDetailPage } from './pages/IssueDetailPage';
 import { ProjectsExplorerPage } from './pages/ProjectsExplorerPage';
 import { ProjectDetailPage } from './pages/ProjectDetailPage';
-import { MyContributionsPage } from './pages/MyContributionsPage';
+import { MyProfilePage } from './pages/MyProfilePage';
 import { ContributionDetailPage } from './pages/ContributionDetailPage';
 import { LeaderboardPage } from './pages/LeaderboardPage';
-import { DashboardPage } from './pages/DashboardPage';
 import { PublicProfilePage } from './pages/PublicProfilePage';
-import { StatsPage } from './pages/StatsPage';
-import OpsPanelPage from './pages/OpsPanelPage';
+import { NotFoundPage } from './pages/NotFoundPage';
 
-const queryClient = new QueryClient({
+export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
@@ -28,22 +28,45 @@ export function App() {
       <BrowserRouter>
         <Layout>
           <Routes>
-            <Route path="/" element={<Navigate to="/issues" replace />} />
+            {/* Public Root Route with Auth Gate */}
+            <Route path="/" element={<RootGate />} />
+
+            {/* Public Exploration Routes */}
             <Route path="/issues" element={<IssuesExplorerPage />} />
             <Route path="/issues/:id" element={<IssueDetailPage />} />
             <Route path="/projects" element={<ProjectsExplorerPage />} />
             <Route path="/projects/:slug" element={<ProjectDetailPage />} />
             <Route path="/projects/*" element={<ProjectDetailPage />} />
-            <Route path="/contributions" element={<MyContributionsPage />} />
-            <Route path="/contributions/:id" element={<ContributionDetailPage />} />
-            {/* M7 Routes (PRD §9, §16, §17, Plan M7-T6) */}
             <Route path="/leaderboard" element={<LeaderboardPage />} />
-            <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/profile/:username" element={<PublicProfilePage />} />
-            <Route path="/stats" element={<StatsPage />} />
-            {/* M8 Ops Panel Route (PRD §12.6, §18, Plan M8-T6) */}
-            <Route path="/ops" element={<OpsPanelPage />} />
-            <Route path="*" element={<Navigate to="/issues" replace />} />
+
+            {/* Authenticated Participant Primary Area: My Profile */}
+            <Route
+              path="/profile"
+              element={
+                <ProtectedRoute>
+                  <MyProfilePage />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Contribution Detail Deep Dive */}
+            <Route
+              path="/contributions/:id"
+              element={
+                <ProtectedRoute>
+                  <ContributionDetailPage />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Deprecated Participant Routes - Graceful Redirects to Unified My Profile */}
+            <Route path="/dashboard" element={<Navigate to="/profile" replace />} />
+            <Route path="/contributions" element={<Navigate to="/profile?tab=contributions" replace />} />
+            <Route path="/stats" element={<Navigate to="/profile" replace />} />
+
+            {/* 404 Custom Not Found Route */}
+            <Route path="*" element={<NotFoundPage />} />
           </Routes>
         </Layout>
       </BrowserRouter>

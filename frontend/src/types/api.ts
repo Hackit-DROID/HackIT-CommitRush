@@ -86,7 +86,8 @@ export interface ContributionParticipant {
   id: number;
   github_id: number;
   github_username: string;
-  avatar_url: string;
+  avatar_url: string | null;
+  is_suspended?: boolean;
 }
 
 export interface ContributionIssue {
@@ -120,6 +121,7 @@ export interface Contribution {
   pull_request: ContributionPullRequest;
   status: ContributionStatus | string;
   sub_status: string;
+  status_message?: string;
   retry_count: number;
   flagged_reason: string;
   approved_at: string | null;

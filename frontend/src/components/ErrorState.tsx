@@ -10,18 +10,44 @@ export function ErrorState({ error, onRetry, title }: ErrorStateProps) {
   const isApiError = error instanceof ApiError;
   const isRateLimited = isApiError && error.isRateLimited;
   const isNotFound = isApiError && error.isNotFound;
+  const isServerError = isApiError && error.status >= 500;
 
   const defaultTitle = isRateLimited
     ? 'Rate Limit Exceeded'
     : isNotFound
     ? 'Resource Not Found'
+    : isServerError
+    ? 'Server Temporarily Unavailable'
     : 'Unable to Load Data';
 
-  const defaultMessage = isRateLimited
-    ? 'You have reached the API rate limit budget (~100 requests/min). Please wait a moment before trying again.'
-    : error instanceof Error
-    ? error.message
-    : 'An unexpected error occurred while communicating with the server.';
+  let defaultMessage = 'An unexpected error occurred while communicating with the server.';
+
+  if (isRateLimited) {
+    defaultMessage = 'You have reached the API rate limit budget (~100 requests/min). Please wait a moment before trying again.';
+  } else if (isNotFound) {
+    defaultMessage = 'The requested resource could not be found or has been relocated.';
+  } else if (isServerError) {
+    defaultMessage = 'The CommitRush server encountered a temporary issue. Please try again in a few moments.';
+  } else if (error instanceof Error) {
+    const msg = error.message.trim();
+    // Sanitize technical messages, stack traces, or raw JSON
+    if (
+      msg.includes('Failed to fetch') ||
+      msg.includes('NetworkError') ||
+      msg.includes('Load failed')
+    ) {
+      defaultMessage = 'Unable to connect to the server. Please check your internet connection and try again.';
+    } else if (
+      msg.startsWith('{') ||
+      msg.includes('OperationalError') ||
+      msg.includes('Traceback') ||
+      msg.includes('Internal Server Error')
+    ) {
+      defaultMessage = 'The server encountered an error processing your request. Please try again.';
+    } else if (msg.length > 0 && msg.length < 200) {
+      defaultMessage = msg;
+    }
+  }
 
   return (
     <div

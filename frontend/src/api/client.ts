@@ -2,9 +2,16 @@ import { ApiError } from '../types/api';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
 
+function getCsrfToken(): string | null {
+  if (typeof document === 'undefined') return null;
+  const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 export async function apiRequest<T>(
   endpoint: string,
-  params?: Record<string, string | number | boolean | undefined | null>
+  params?: Record<string, string | number | boolean | undefined | null>,
+  options?: RequestInit
 ): Promise<T> {
   const url = new URL(
     endpoint.startsWith('/') ? `${API_BASE_URL}${endpoint}` : `${API_BASE_URL}/${endpoint}`,
@@ -19,11 +26,20 @@ export async function apiRequest<T>(
     });
   }
 
+  const csrfToken = getCsrfToken();
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...((options?.headers as Record<string, string>) || {}),
+  };
+
+  if (csrfToken && options?.method && options.method.toUpperCase() !== 'GET') {
+    headers['X-CSRFToken'] = csrfToken;
+  }
+
   const response = await fetch(url.toString(), {
-    headers: {
-      Accept: 'application/json',
-    },
     credentials: 'include',
+    ...options,
+    headers,
   });
 
   if (!response.ok) {

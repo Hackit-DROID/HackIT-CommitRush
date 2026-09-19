@@ -3,6 +3,7 @@ import { useContribution } from '../api/contributions';
 import { ContributionStatusBadge, getContributionStatusMeta } from '../components/ContributionStatusBadge';
 import { ErrorState } from '../components/ErrorState';
 import { ContributionDetailSkeleton } from '../components/Skeletons';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 
 const LIFECYCLE_STAGES = [
   { key: 'PENDING', label: 'Pending' },
@@ -37,6 +38,11 @@ export function ContributionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { data: contribution, isLoading, isError, error, refetch } = useContribution(id);
 
+  useDocumentTitle(
+    contribution ? `CommitRush — Contribution #${contribution.id}` : 'CommitRush — Contribution Details',
+    'Track automated validation, merge queue status, and point rewards for your sprint contribution.'
+  );
+
   if (isLoading) {
     return <ContributionDetailSkeleton />;
   }
@@ -45,7 +51,7 @@ export function ContributionDetailPage() {
     return (
       <div className="max-w-4xl mx-auto space-y-4">
         <Link
-          to="/contributions"
+          to="/profile?tab=contributions"
           className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-cyan-400 transition-colors"
         >
           &larr; Back to My Contributions
@@ -71,7 +77,7 @@ export function ContributionDetailPage() {
       {/* Breadcrumb Navigation */}
       <div className="flex items-center justify-between">
         <Link
-          to="/contributions"
+          to="/profile?tab=contributions"
           className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-cyan-400 transition-colors"
         >
           &larr; Back to My Contributions
