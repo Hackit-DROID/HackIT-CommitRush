@@ -221,4 +221,60 @@ describe('LeaderboardPage', () => {
       expect(screen.getByTestId('empty-state')).toBeInTheDocument();
     });
   });
+
+
+  it('renders daily points, remaining allowance, and limit hit indicator', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        count: 1,
+        page: 1,
+        page_size: 50,
+        num_pages: 1,
+        frozen: false,
+        frozen_at: null,
+        results: [
+          {
+            rank: 1,
+            participant_id: 10,
+            github_username: 'capped_coder',
+            avatar_url: null,
+            total_points: 500,
+            merged_count: 5,
+            points_today: 500,
+            daily_limit: 500,
+            remaining_daily_allowance: 0,
+            is_daily_limit_reached: true,
+          },
+        ],
+        me: {
+          rank: 1,
+          participant_id: 10,
+          github_username: 'capped_coder',
+          avatar_url: null,
+          total_points: 500,
+          merged_count: 5,
+          points_today: 500,
+          daily_limit: 500,
+          remaining_daily_allowance: 0,
+          is_daily_limit_reached: true,
+        },
+      }),
+    });
+
+    renderWithProviders();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('leaderboard-table')).toBeInTheDocument();
+    });
+
+    expect(screen.getAllByText('capped_coder').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Daily Allowance')).toBeInTheDocument();
+
+    expect(screen.getAllByText(/\/ 500 today/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/0 remaining/).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByTestId('daily-limit-indicator')).toBeInTheDocument();
+    expect(screen.getByText('Capped')).toBeInTheDocument();
+  });
 });
+

@@ -2,8 +2,9 @@ import logging
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.utils import timezone
+from core.categories import ISSUE_CATEGORIES
 from rest_framework import exceptions, generics, permissions, status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.exceptions import NotFound, ValidationError
@@ -28,12 +29,15 @@ from core.models import (
     Participant,
     PointTransaction,
     Project,
+    ScoringBreakdown,
     WebhookEvent,
 )
 from core.semaphore import RedisMergeSemaphore
 from core.serializers import (
     AdminAuditLogSerializer,
+    AdminFarmingReviewSerializer,
     AdminGitHubSyncRequestSerializer,
+
     AdminIssueDetailSerializer,
     AdminIssueUpdateSerializer,
     AdminParticipantDetailSerializer,
@@ -460,6 +464,30 @@ class IssueListView(generics.ListAPIView):
         return queryset.order_by(*ordering_fields)
 
 
+class IssueCategoryListView(APIView):
+    """
+    GET /api/v1/issues/categories/
+    Public, authoritative issue categories endpoint.
+    Returns list of supported categories with user-facing labels and active issue counts.
+    """
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = []
+
+    def get(self, request):
+        db_counts = dict(
+            Issue.objects.values('category').annotate(count=Count('id')).values_list('category', 'count')
+        )
+        results = [
+            {
+                'value': key,
+                'label': label,
+                'count': db_counts.get(key, 0),
+            }
+            for key, label in ISSUE_CATEGORIES
+        ]
+        return Response(results, status=status.HTTP_200_OK)
+
+
 class IssueDetailView(generics.RetrieveAPIView):
     """
     M3-T4: GET /api/v1/issues/{id}/
@@ -575,8 +603,10 @@ class ContributionDetailView(generics.RetrieveAPIView):
         'participant',
         'issue__project',
         'pull_request__repo',
+        'scoring_breakdown',
     )
     lookup_field = 'pk'
+
 
 
 # =============================================================================
@@ -790,18 +820,17 @@ class DashboardView(APIView):
         config = EventConfig.get_solo()
         today = timezone.now().date()
 
-        # Authoritative daily usage
-        daily_usage, _ = DailyContributionUsage.objects.get_or_create(
+        # Authoritative daily usage (read-only query; avoid DB write on GET)
+        daily_usage = DailyContributionUsage.objects.filter(
             participant=participant,
             date=today,
-            defaults={'contributions_count': 0, 'points_count': 0},
-        )
+        ).first()
 
         daily_usage_data = {
             'date': today,
-            'contributions_count': daily_usage.contributions_count,
+            'contributions_count': daily_usage.contributions_count if daily_usage else 0,
             'max_contributions': config.max_contributions_per_day,
-            'points_count': daily_usage.points_count,
+            'points_count': daily_usage.points_count if daily_usage else 0,
             'max_points': config.max_points_per_day,
         }
 
@@ -815,16 +844,17 @@ class DashboardView(APIView):
                 participant=participant,
                 status__in=in_progress_statuses,
             )
-            .select_related('participant', 'issue__project', 'pull_request__repo')
+            .select_related('participant', 'issue__project', 'pull_request__repo', 'scoring_breakdown')
             .order_by('-created_at', '-id')
         )
 
         # Recent activity (all statuses, bounded to latest 10)
         recent_activity_qs = (
             Contribution.objects.filter(participant=participant)
-            .select_related('participant', 'issue__project', 'pull_request__repo')
+            .select_related('participant', 'issue__project', 'pull_request__repo', 'scoring_breakdown')
             .order_by('-created_at', '-id')[:10]
         )
+
 
         dashboard_data = {
             'participant': participant,
@@ -1390,6 +1420,36 @@ class AdminAuditLogListView(generics.ListAPIView):
         if target_param:
             qs = qs.filter(target_type__iexact=target_param.strip())
         return qs
+
+
+class AdminFarmingReviewListView(generics.ListAPIView):
+    """
+    GET /api/v1/admin/farming-reviews/
+    Administrative endpoint to inspect and review contributions flagged with farming signals (PRD §22, Deliverable 7).
+    """
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
+    serializer_class = AdminFarmingReviewSerializer
+    pagination_class = AdminAuditLogPagination
+
+    def get_queryset(self):
+        qs = (
+            ScoringBreakdown.objects.filter(farming_signals__has_signals=True)
+            .select_related(
+                'contribution__participant',
+                'contribution__pull_request__repo',
+                'contribution__issue',
+            )
+            .order_by('-created_at', '-id')
+        )
+        risk_param = self.request.query_params.get('risk_level')
+        if risk_param:
+            qs = qs.filter(farming_signals__risk_level__iexact=risk_param.strip())
+        username_param = self.request.query_params.get('username')
+        if username_param:
+            qs = qs.filter(contribution__participant__github_username__icontains=username_param.strip())
+        return qs
+
 
 
 

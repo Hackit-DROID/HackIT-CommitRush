@@ -1,6 +1,7 @@
 import { ApiError } from '../types/api';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+const RAW_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '/api/v1';
+const API_BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
 
 function getCsrfToken(): string | null {
   if (typeof document === 'undefined') return null;
@@ -13,10 +14,10 @@ export async function apiRequest<T>(
   params?: Record<string, string | number | boolean | undefined | null>,
   options?: RequestInit
 ): Promise<T> {
-  const url = new URL(
-    endpoint.startsWith('/') ? `${API_BASE_URL}${endpoint}` : `${API_BASE_URL}/${endpoint}`,
-    window.location.origin
-  );
+  const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const fullPath = `${API_BASE_URL}${normalizedEndpoint}`;
+  const baseOrigin = typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'http://localhost:5173';
+  const url = new URL(fullPath, baseOrigin);
 
   if (params) {
     Object.entries(params).forEach(([key, val]) => {

@@ -1,7 +1,9 @@
 from django.urls import path
 from core.api_views import (
     AdminAuditLogListView,
+    AdminFarmingReviewListView,
     AdminGitHubSyncView,
+
     AdminIssueDetailView,
     AdminIssueListView,
     AdminOpsMetricsView,
@@ -12,6 +14,7 @@ from core.api_views import (
     ContributionDetailView,
     DashboardView,
     EventStatsView,
+    IssueCategoryListView,
     IssueDetailView,
     IssueListView,
     LeaderboardView,
@@ -46,6 +49,7 @@ urlpatterns = [
     path('projects/', ProjectListView.as_view(), name='project-list'),
     path('projects/<path:slug>/', ProjectDetailView.as_view(), name='project-detail'),
     path('issues/', IssueListView.as_view(), name='issue-list'),
+    path('issues/categories/', IssueCategoryListView.as_view(), name='issue-category-list'),
     path('issues/<int:pk>/', IssueDetailView.as_view(), name='issue-detail'),
     # M4 GitHub Webhook Receiver (PRD §13.2, §16, Plan M4-T1)
     path('webhooks/github/', github_webhook_view, name='github-webhook'),
@@ -67,5 +71,7 @@ urlpatterns = [
     path('admin/participants/<int:pk>/suspend/', AdminParticipantModerationView.as_view(), name='admin-participant-suspend'),
     path('admin/points/adjust/', AdminPointAdjustmentView.as_view(), name='admin-point-adjust'),
     path('admin/audit-logs/', AdminAuditLogListView.as_view(), name='admin-audit-logs'),
+    path('admin/farming-reviews/', AdminFarmingReviewListView.as_view(), name='admin-farming-reviews'),
 ]
+
 

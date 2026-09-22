@@ -1,5 +1,10 @@
 from rest_framework import serializers
-from core.models import Project, Issue, IssueLabel, Contribution, Participant, PullRequest, EventConfig, AuditLog
+from core.models import (
+    Project, Issue, IssueLabel, Contribution, Participant,
+    PullRequest, EventConfig, AuditLog, ScoringBreakdown,
+)
+from core.categories import VALID_CATEGORY_KEYS
+
 
 
 class ProjectListSerializer(serializers.ModelSerializer):
@@ -210,15 +215,56 @@ class ContributionPullRequestSerializer(serializers.ModelSerializer):
         return f"https://github.com/{obj.repo.full_name}/pull/{obj.number}"
 
 
+class ScoringBreakdownSerializer(serializers.ModelSerializer):
+    """
+    Transparent breakdown of contribution point awards (PRD §14, §15, Deliverable 8).
+    Exposes base points, contribution category, multipliers, caps, and farming signals.
+    """
+    class Meta:
+        model = ScoringBreakdown
+        fields = [
+            'id',
+            'base_points',
+            'category',
+            'category_label',
+            'multiplier',
+            'calculated_points',
+            'per_pr_cap',
+            'points_after_pr_cap',
+            'daily_points_cap',
+            'daily_points_before',
+            'daily_allowance_remaining',
+            'cap_applied',
+            'final_awarded_points',
+            'farming_signals',
+            'created_at',
+        ]
+        read_only_fields = fields
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        request = self.context.get('request')
+        if request is not None:
+            is_admin = bool(
+                request.user
+                and request.user.is_authenticated
+                and (request.user.is_staff or request.user.is_superuser)
+            )
+            if not is_admin:
+                ret.pop('farming_signals', None)
+        return ret
+
+
 class ContributionSerializer(serializers.ModelSerializer):
     """
     Serializer for Contribution detail and list views (PRD §16, Plan M5-T4).
     Includes nested participant, issue, and pull request information,
-    state machine statuses, and retry/audit timestamps.
+    state machine statuses, retry/audit timestamps, and scoring breakdown.
     """
     participant = ContributionParticipantSerializer(read_only=True)
     issue = ContributionIssueSerializer(read_only=True)
     pull_request = ContributionPullRequestSerializer(read_only=True)
+    scoring_breakdown = ScoringBreakdownSerializer(read_only=True)
 
     class Meta:
         model = Contribution
@@ -232,12 +278,14 @@ class ContributionSerializer(serializers.ModelSerializer):
             'is_priority',
             'retry_count',
             'flagged_reason',
+            'scoring_breakdown',
             'approved_at',
             'merged_at',
             'created_at',
             'updated_at',
         ]
         read_only_fields = fields
+
 
 
 class AdminPointAdjustmentSerializer(serializers.Serializer):
@@ -272,7 +320,7 @@ class AdminPointAdjustmentSerializer(serializers.Serializer):
 
 class LeaderboardEntrySerializer(serializers.Serializer):
     """
-    Public serializer for individual leaderboard entries (PRD §8.6, §16, Plan M7-T1).
+    Public serializer for individual leaderboard entries (PRD §8.6, §16, Plan M7-T1, Deliverable 9).
     """
     rank = serializers.IntegerField(read_only=True)
     participant_id = serializers.IntegerField(read_only=True)
@@ -280,6 +328,11 @@ class LeaderboardEntrySerializer(serializers.Serializer):
     avatar_url = serializers.CharField(read_only=True, allow_null=True)
     total_points = serializers.IntegerField(read_only=True)
     merged_count = serializers.IntegerField(read_only=True)
+    points_today = serializers.IntegerField(read_only=True, default=0)
+    daily_limit = serializers.IntegerField(read_only=True, default=500)
+    remaining_daily_allowance = serializers.IntegerField(read_only=True, default=500)
+    is_daily_limit_reached = serializers.BooleanField(read_only=True, default=False)
+
 
 
 class DailyUsageSerializer(serializers.Serializer):
@@ -443,6 +496,9 @@ class AdminSystemControlsSerializer(serializers.ModelSerializer):
             'merge_concurrency',
             'max_contributions_per_day',
             'max_points_per_day',
+            'per_pr_max_points',
+            'category_multipliers',
+            'allow_partial_daily_points',
             'merge_paused',
             'validation_paused',
             'submissions_paused',
@@ -466,6 +522,26 @@ class AdminSystemControlsSerializer(serializers.ModelSerializer):
         if value < 1:
             raise serializers.ValidationError("max_points_per_day must be at least 1.")
         return value
+
+    def validate_per_pr_max_points(self, value):
+        if value < 1:
+            raise serializers.ValidationError("per_pr_max_points must be at least 1.")
+        return value
+
+    def validate_category_multipliers(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("category_multipliers must be a dictionary.")
+        cleaned = {}
+        for k, v in value.items():
+            try:
+                mult = float(v)
+                if mult <= 0:
+                    raise ValueError()
+                cleaned[str(k).lower()] = mult
+            except (ValueError, TypeError):
+                raise serializers.ValidationError(f"Multiplier for category '{k}' must be a positive number.")
+        return cleaned
+
 
     def validate_event_status(self, value):
         allowed = {'pending', 'active', 'paused', 'ended'}
@@ -511,7 +587,7 @@ class AdminIssueUpdateSerializer(serializers.Serializer):
         allow_blank=True,
     )
     category = serializers.ChoiceField(
-        choices=['backend', 'frontend', 'fullstack', 'docs', 'devops', 'design', 'mobile', 'general', ''],
+        choices=VALID_CATEGORY_KEYS + ['design', 'mobile', 'general', ''],
         required=False,
         allow_blank=True,
     )
@@ -632,7 +708,34 @@ class AdminAuditLogSerializer(serializers.ModelSerializer):
             'details',
             'created_at',
         ]
+class AdminFarmingReviewSerializer(serializers.ModelSerializer):
+    """
+    Serializer for reviewing contributions with detected farming signals (PRD §22, Deliverable 7).
+    """
+    participant_username = serializers.CharField(source='contribution.participant.github_username', read_only=True)
+    participant_id = serializers.IntegerField(source='contribution.participant.id', read_only=True)
+    repo = serializers.CharField(source='contribution.pull_request.repo.full_name', read_only=True)
+    pr_number = serializers.IntegerField(source='contribution.pull_request.number', read_only=True)
+    issue_number = serializers.IntegerField(source='contribution.issue.number', read_only=True)
+
+    class Meta:
+        model = ScoringBreakdown
+        fields = [
+            'id',
+            'contribution_id',
+            'participant_id',
+            'participant_username',
+            'repo',
+            'pr_number',
+            'issue_number',
+            'category',
+            'category_label',
+            'base_points',
+            'multiplier',
+            'calculated_points',
+            'final_awarded_points',
+            'cap_applied',
+            'farming_signals',
+            'created_at',
+        ]
         read_only_fields = fields
-
-
-

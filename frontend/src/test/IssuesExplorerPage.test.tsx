@@ -138,4 +138,125 @@ describe('IssuesExplorerPage', () => {
       expect(lastUrl).toContain('sort=newest');
     });
   });
+
+  it('renders category selector with "Category: All Categories" and all 16 supported categories', async () => {
+    globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/issues/categories/')) {
+        return {
+          ok: true,
+          json: async () => [
+            { value: 'feature', label: 'Features', count: 844 },
+            { value: 'test', label: 'Testing & QA', count: 147 },
+            { value: 'bug', label: 'Bug Fixes', count: 132 },
+            { value: 'security', label: 'Security', count: 112 },
+            { value: 'performance', label: 'Performance', count: 99 },
+            { value: 'docs', label: 'Documentation', count: 75 },
+            { value: 'refactor', label: 'Refactoring', count: 32 },
+            { value: 'validation', label: 'Validation', count: 30 },
+            { value: 'ui', label: 'UI', count: 30 },
+            { value: 'database', label: 'Database & Storage', count: 3 },
+            { value: 'networking', label: 'Networking', count: 3 },
+            { value: 'frontend', label: 'Frontend', count: 3 },
+            { value: 'backend', label: 'Backend', count: 3 },
+            { value: 'devops', label: 'DevOps / Infrastructure', count: 1 },
+            { value: 'fullstack', label: 'Fullstack', count: 1 },
+            { value: 'dx', label: 'Developer Experience', count: 1 },
+          ],
+        } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({ count: 0, next: null, previous: null, results: [] }),
+      } as Response;
+    });
+
+    renderWithProviders();
+
+    const categorySelect = screen.getByLabelText(/filter by issue category/i) as HTMLSelectElement;
+    expect(categorySelect).toBeInTheDocument();
+
+    const options = Array.from(categorySelect.options).map((opt) => opt.text);
+    expect(options[0]).toBe('Category: All Categories');
+    expect(options).toContain('Features');
+    expect(options).toContain('Testing & QA');
+    expect(options).toContain('Bug Fixes');
+    expect(options).toContain('Security');
+    expect(options).toContain('Performance');
+    expect(options).toContain('Documentation');
+    expect(options).toContain('Refactoring');
+    expect(options).toContain('Validation');
+    expect(options).toContain('UI');
+    expect(options).toContain('Database & Storage');
+    expect(options).toContain('Networking');
+    expect(options).toContain('Frontend');
+    expect(options).toContain('Backend');
+    expect(options).toContain('DevOps / Infrastructure');
+    expect(options).toContain('Fullstack');
+    expect(options).toContain('Developer Experience');
+    expect(categorySelect.options.length).toBe(17);
+  });
+
+  it('changing category filter updates fetch query with category parameter', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/issues/categories/')) {
+        return {
+          ok: true,
+          json: async () => [
+            { value: 'feature', label: 'Features', count: 844 },
+            { value: 'security', label: 'Security', count: 112 },
+          ],
+        } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({ count: 0, next: null, previous: null, results: [] }),
+      } as Response;
+    });
+
+    globalThis.fetch = fetchMock;
+
+    renderWithProviders();
+
+    const categorySelect = screen.getByLabelText(/filter by issue category/i);
+    fireEvent.change(categorySelect, { target: { value: 'security' } });
+
+    await waitFor(() => {
+      const calls = fetchMock.mock.calls;
+      const matchingCall = calls.find((c) => (c[0] as string).includes('category=security'));
+      expect(matchingCall).toBeTruthy();
+    });
+  });
+
+  it('displays category badge on issue card with human-readable label', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        count: 1,
+        next: null,
+        previous: null,
+        results: [
+          {
+            id: 99,
+            title: 'Fix CSRF token validation',
+            project: 'hackit/security-core',
+            github_number: 202,
+            points: 150,
+            difficulty: 'advanced',
+            category: 'security',
+            status: 'open',
+            is_featured: false,
+            labels: ['security', 'auth'],
+            github_url: 'https://github.com/hackit/security-core/issues/202',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithProviders('/issues?category=security');
+
+    await waitFor(() => {
+      expect(screen.getByText('Security')).toBeInTheDocument();
+      expect(screen.getByText('Category: Security')).toBeInTheDocument();
+    });
+  });
 });

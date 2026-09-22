@@ -37,6 +37,8 @@ class LeaderboardFreezeTests(TestCase):
         self.client = APIClient()
         self.config = EventConfig.get_solo()
         self.config.leaderboard_frozen = False
+        self.config.per_pr_max_points = 500
+        self.config.category_multipliers = {'feature': 1.0}
         self.config.save()
 
         self.user1 = User.objects.create_user(username='frozen_alice', password='password123')

@@ -1,11 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiRequest } from './client';
 import {
+  IssueCategoryItem,
   IssueDetail,
   IssueFilters,
   IssueListItem,
   PaginatedResponse,
 } from '../types/api';
+import { ISSUE_CATEGORIES } from '../constants/categories';
 
 export async function fetchIssues(
   filters: IssueFilters = {}
@@ -46,3 +48,22 @@ export function useIssue(id: number | string | undefined) {
     staleTime: 60_000,
   });
 }
+
+export async function fetchIssueCategories(): Promise<IssueCategoryItem[]> {
+  try {
+    const data = await apiRequest<IssueCategoryItem[]>('/issues/categories/');
+    return Array.isArray(data) ? data : ISSUE_CATEGORIES;
+  } catch {
+    return ISSUE_CATEGORIES;
+  }
+}
+
+export function useIssueCategories() {
+  return useQuery({
+    queryKey: ['issue-categories'],
+    queryFn: fetchIssueCategories,
+    initialData: ISSUE_CATEGORIES,
+    staleTime: 60_000,
+  });
+}
+

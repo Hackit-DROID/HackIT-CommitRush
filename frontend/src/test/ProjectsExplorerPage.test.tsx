@@ -19,6 +19,20 @@ function renderWithProviders(ui: React.ReactElement) {
   );
 }
 
+// Helpers to build mock GitHub Contents API responses
+function makeGitHubDir(name: string) {
+  return {
+    name,
+    path: name,
+    sha: `sha-${name}`,
+    size: 0,
+    url: `https://api.github.com/repos/Hackit-DROID/Open-Source-Contribution-Drive/contents/${name}`,
+    html_url: `https://github.com/Hackit-DROID/Open-Source-Contribution-Drive/tree/main/${name}`,
+    git_url: `https://api.github.com/repos/Hackit-DROID/Open-Source-Contribution-Drive/git/trees/sha-${name}`,
+    type: 'dir',
+  };
+}
+
 describe('ProjectsExplorerPage', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -30,57 +44,34 @@ describe('ProjectsExplorerPage', () => {
     expect(screen.getByTestId('projects-skeleton')).toBeInTheDocument();
   });
 
-  it('renders project list successfully', async () => {
+  it('renders project list from GitHub monorepo', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        count: 2,
-        next: null,
-        previous: null,
-        results: [
-          {
-            id: 1,
-            github_repo_id: 101,
-            owner: 'hackit',
-            name: 'backend-core',
-            full_name: 'hackit/backend-core',
-            language: 'Python',
-            is_enabled: true,
-            description: 'Core backend service',
-          },
-          {
-            id: 2,
-            github_repo_id: 102,
-            owner: 'hackit',
-            name: 'frontend-ui',
-            full_name: 'hackit/frontend-ui',
-            language: 'TypeScript',
-            is_enabled: false,
-            description: 'UI client',
-          },
-        ],
-      }),
+      json: async () => [
+        makeGitHubDir('AI_Data_Analyst_Agent'),
+        makeGitHubDir('AI_Data_Analyst_Agent_2'),
+        makeGitHubDir('Blood_Donation_Management_System'),
+        { name: 'README.md', path: 'README.md', sha: 'sha-readme', size: 500, type: 'file', url: '', html_url: '', git_url: '' },
+      ],
     } as Response);
 
     renderWithProviders(<ProjectsExplorerPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('hackit/backend-core')).toBeInTheDocument();
-      expect(screen.getByText('hackit/frontend-ui')).toBeInTheDocument();
-      expect(screen.getByText('Active')).toBeInTheDocument();
-      expect(screen.getByText('Disabled')).toBeInTheDocument();
+      // Grouped: "AI Data Analyst Agent" (2 variants) + "Blood Donation Management System" (1 variant)
+      expect(screen.getByText('AI Data Analyst Agent')).toBeInTheDocument();
+      expect(screen.getByText('Blood Donation Management System')).toBeInTheDocument();
+      // Variant count "2" appears alongside "variants in the monorepo"
+      expect(screen.getByText(/variants? in the monorepo/)).toBeInTheDocument();
     });
   });
 
   it('renders empty state when no projects match filters', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({
-        count: 0,
-        next: null,
-        previous: null,
-        results: [],
-      }),
+      json: async () => [
+        { name: 'README.md', path: 'README.md', sha: 'sha-readme', size: 500, type: 'file', url: '', html_url: '', git_url: '' },
+      ],
     } as Response);
 
     renderWithProviders(<ProjectsExplorerPage />);
@@ -97,7 +88,7 @@ describe('ProjectsExplorerPage', () => {
       .mockRejectedValueOnce(new Error('Network error'))
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ count: 0, next: null, previous: null, results: [] }),
+        json: async () => [],
       } as Response);
 
     globalThis.fetch = fetchMock;
@@ -106,7 +97,6 @@ describe('ProjectsExplorerPage', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('error-state')).toBeInTheDocument();
-      expect(screen.getByText('Network error')).toBeInTheDocument();
     });
 
     const retryBtn = screen.getByRole('button', { name: /retry/i });
@@ -114,55 +104,30 @@ describe('ProjectsExplorerPage', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('renders rate-limit error message on HTTP 429', async () => {
+  it('client-side search filters projects by name', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 429,
-      statusText: 'Too Many Requests',
-      json: async () => ({ detail: 'Request was throttled.' }),
+      ok: true,
+      json: async () => [
+        makeGitHubDir('AI_Data_Analyst_Agent'),
+        makeGitHubDir('Blood_Donation_Management_System'),
+        makeGitHubDir('College_Academic_Portal'),
+      ],
     } as Response);
 
     renderWithProviders(<ProjectsExplorerPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Rate Limit Exceeded')).toBeInTheDocument();
+      expect(screen.getByText('AI Data Analyst Agent')).toBeInTheDocument();
     });
-  });
 
-  it('submitting search updates query and fetches filtered data', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        count: 1,
-        next: null,
-        previous: null,
-        results: [
-          {
-            id: 1,
-            github_repo_id: 101,
-            owner: 'hackit',
-            name: 'backend-core',
-            full_name: 'hackit/backend-core',
-            language: 'Python',
-            is_enabled: true,
-            description: 'Core backend service',
-          },
-        ],
-      }),
-    } as Response);
-
-    globalThis.fetch = fetchMock;
-
-    renderWithProviders(<ProjectsExplorerPage />);
-
-    const searchInput = screen.getByPlaceholderText(/search repo name or description/i);
-    fireEvent.change(searchInput, { target: { value: 'backend' } });
+    const searchInput = screen.getByPlaceholderText(/search project name/i);
+    fireEvent.change(searchInput, { target: { value: 'Blood' } });
     fireEvent.submit(searchInput.closest('form')!);
 
     await waitFor(() => {
-      const calls = fetchMock.mock.calls;
-      const lastUrl = calls[calls.length - 1][0] as string;
-      expect(lastUrl).toContain('search=backend');
+      expect(screen.getByText('Blood Donation Management System')).toBeInTheDocument();
+      expect(screen.queryByText('AI Data Analyst Agent')).not.toBeInTheDocument();
+      expect(screen.queryByText('College Academic Portal')).not.toBeInTheDocument();
     });
   });
 });

@@ -8,6 +8,7 @@ from core.models import (
     AuditLog,
     Contribution,
     DailyContributionUsage,
+    EventConfig,
     Issue,
     Participant,
     PointTransaction,
@@ -25,6 +26,11 @@ class AdminM8T2ContributionTests(TestCase):
     """
 
     def setUp(self):
+        self.config = EventConfig.get_solo()
+        self.config.per_pr_max_points = 500
+        self.config.category_multipliers = {'database': 1.0}
+        self.config.save()
+
         self.admin_user = User.objects.create_superuser(
             username='superadmin',
             email='admin@hackit.org',

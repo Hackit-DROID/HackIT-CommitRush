@@ -51,14 +51,14 @@ export function ErrorState({ error, onRetry, title }: ErrorStateProps) {
 
   return (
     <div
-      className="bg-slate-900/60 border border-red-900/40 rounded-2xl p-8 text-center max-w-md mx-auto my-8 shadow-lg shadow-red-950/20"
+      className="bg-[#ffffff] border border-[#ff5a1f]/30 rounded-[6px] p-8 text-center max-w-md mx-auto my-8 shadow-sm"
       data-testid="error-state"
     >
       <div
         className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4 ${
           isRateLimited
-            ? 'bg-amber-950/60 border border-amber-800/60 text-amber-400'
-            : 'bg-red-950/60 border border-red-800/60 text-red-400'
+            ? 'bg-amber-50 border border-amber-300 text-amber-600'
+            : 'bg-[#ff5a1f]/10 border border-[#ff5a1f]/30 text-[#ff5a1f]'
         }`}
       >
         {isRateLimited ? (
@@ -72,14 +72,14 @@ export function ErrorState({ error, onRetry, title }: ErrorStateProps) {
         )}
       </div>
 
-      <h3 className="text-lg font-semibold text-white mb-2">{title || defaultTitle}</h3>
-      <p className="text-sm text-slate-400 mb-6 leading-relaxed">{defaultMessage}</p>
+      <h3 className="text-lg font-bold text-[#111111] mb-2">{title || defaultTitle}</h3>
+      <p className="text-sm text-[#555555] mb-6 leading-relaxed">{defaultMessage}</p>
 
       {onRetry && (
         <button
           onClick={onRetry}
           type="button"
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm font-medium text-white border border-slate-700 transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-[4px] bg-[#050505] hover:bg-[#222222] text-sm font-medium text-white transition-colors shadow-none focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ff5a1f]"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />

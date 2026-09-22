@@ -33,6 +33,8 @@ class TransactionalPointAwardTests(TestCase):
         self.config = EventConfig.get_solo()
         self.config.max_contributions_per_day = 3
         self.config.max_points_per_day = 150
+        self.config.category_multipliers = {'feature': 1.0}
+        self.config.allow_partial_daily_points = False
         self.config.save()
 
         self.user = User.objects.create_user(username='alice', password='password123')
@@ -187,6 +189,8 @@ class ConcurrentPointAwardRaceTests(TransactionTestCase):
         self.config = EventConfig.get_solo()
         self.config.max_contributions_per_day = 2
         self.config.max_points_per_day = 100
+        self.config.category_multipliers = {'feature': 1.0}
+        self.config.allow_partial_daily_points = False
         self.config.save()
 
         self.user = User.objects.create_user(username='concurrent_bob', password='password123')
@@ -234,6 +238,9 @@ class ConcurrentPointAwardRaceTests(TransactionTestCase):
             self.contributions.append(c)
 
     def test_concurrent_threads_competing_at_daily_cap(self):
+        from django.db import connection
+        if connection.vendor == 'sqlite':
+            self.skipTest('SQLite does not support row-level locking for concurrent writer threads')
         from concurrent.futures import ThreadPoolExecutor
 
         def worker(contrib_id):

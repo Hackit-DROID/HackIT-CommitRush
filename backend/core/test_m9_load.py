@@ -258,7 +258,8 @@ class M9T3LoadAndConcurrencyTests(TransactionTestCase):
                 close_old_connections()
 
         wall_start = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=20) as executor:
+        max_workers = 1 if connection.vendor == 'sqlite' else 20
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(ingest_single_webhook, delivery_ids[i], i) for i in range(total_webhooks)]
             results = [f.result() for f in as_completed(futures)]
         wall_end = time.perf_counter()
@@ -330,7 +331,8 @@ class M9T3LoadAndConcurrencyTests(TransactionTestCase):
                 close_old_connections()
 
         wall_start = time.perf_counter()
-        with ThreadPoolExecutor(max_workers=16) as executor:
+        max_workers = 1 if connection.vendor == 'sqlite' else 16
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(execute_concurrent_merge, c.id) for c in contributions]
             results = [f.result() for f in as_completed(futures)]
         wall_end = time.perf_counter()

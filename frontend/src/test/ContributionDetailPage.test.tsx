@@ -109,4 +109,80 @@ describe('ContributionDetailPage', () => {
       expect(screen.getByText(/Back to My Contributions/)).toBeInTheDocument();
     });
   });
+
+  it('renders transparent points breakdown card with base, multiplier, and cap', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 25,
+        participant: {
+          id: 5,
+          github_id: 99999,
+          github_username: 'supercoder',
+          avatar_url: null,
+        },
+        issue: {
+          id: 105,
+          github_issue_id: 8005,
+          title: 'Fix race condition in pipeline',
+          project: 'hackit/core',
+          github_number: 14,
+          points: 20,
+          difficulty: 'intermediate',
+          category: 'bug',
+          status: 'closed',
+          github_url: 'https://github.com/hackit/core/issues/14',
+        },
+        pull_request: {
+          id: 305,
+          github_pr_id: 9005,
+          number: 42,
+          repo: 'hackit/core',
+          merged: true,
+          merged_at: '2026-09-18T10:00:00Z',
+          head_sha: '123456',
+          github_url: 'https://github.com/hackit/core/pull/42',
+        },
+        status: 'MERGED',
+        sub_status: '',
+        retry_count: 0,
+        flagged_reason: '',
+        scoring_breakdown: {
+          id: 1,
+          base_points: 20,
+          category: 'bug',
+          category_label: 'Bug Fix',
+          multiplier: 1.0,
+          calculated_points: 20,
+          per_pr_cap: 100,
+          points_after_pr_cap: 20,
+          daily_points_cap: 500,
+          daily_points_before: 495,
+          daily_allowance_remaining: 5,
+          cap_applied: 'Daily limit',
+          final_awarded_points: 5,
+          farming_signals: {},
+          created_at: '2026-09-18T10:00:00Z',
+        },
+        approved_at: '2026-09-18T09:30:00Z',
+        merged_at: '2026-09-18T10:00:00Z',
+        created_at: '2026-09-18T09:00:00Z',
+        updated_at: '2026-09-18T10:00:00Z',
+      }),
+    } as Response);
+
+    renderWithProviders('/contributions/25');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('scoring-breakdown-card')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Points Breakdown')).toBeInTheDocument();
+    expect(screen.getByText('5 Points Awarded')).toBeInTheDocument();
+    expect(screen.getByText('Base Points')).toBeInTheDocument();
+    expect(screen.getByText('Bug Fix')).toBeInTheDocument();
+    expect(screen.getByText('1×')).toBeInTheDocument();
+    expect(screen.getByText('Daily limit')).toBeInTheDocument();
+  });
 });
+

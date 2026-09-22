@@ -35,6 +35,16 @@ export async function logoutUser(): Promise<{ detail: string }> {
   });
 }
 
+export function getGitHubLoginUrl(nextPath: string = '/profile'): string {
+  if (
+    typeof window !== 'undefined' &&
+    (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost')
+  ) {
+    return `http://localhost:8000/auth/github/login/?next=${encodeURIComponent(nextPath)}`;
+  }
+  return `/api/v1/auth/github/login/?next=${encodeURIComponent(nextPath)}`;
+}
+
 export function useCurrentUser() {
   return useQuery<CurrentUser, Error>({
     queryKey: authKeys.me,

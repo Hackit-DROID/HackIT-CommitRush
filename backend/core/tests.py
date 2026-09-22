@@ -443,7 +443,7 @@ class GitHubOAuthTestCase(TestCase):
 
         response = self.client.get('/auth/github/callback/?code=code_next&state=valid_state_next')
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.url, '/custom-dashboard')
+        self.assertEqual(response.url, 'http://localhost:5173/custom-dashboard')
 
     @patch('core.oauth.requests.post')
     @patch('core.oauth.requests.get')
@@ -655,6 +655,24 @@ class GitHubOAuthTestCase(TestCase):
 
         resp_me_again = self.client.get('/api/v1/auth/me/')
         self.assertEqual(resp_me_again.status_code, 401)
+
+    def test_get_or_create_participant_handles_username_collision_gracefully(self):
+        from core.oauth import get_or_create_participant_from_github
+        # Pre-create users with collision names
+        User.objects.create_user(username='colliding_user', email='c1@test.com')
+        User.objects.create_user(username='colliding_user_77777', email='c2@test.com')
+
+        user_info = {
+            'id': 77777,
+            'login': 'colliding_user',
+            'avatar_url': 'https://avatars.githubusercontent.com/u/77777',
+            'email': 'c3@test.com',
+        }
+        participant, created = get_or_create_participant_from_github(user_info)
+        self.assertTrue(created)
+        self.assertEqual(participant.github_id, 77777)
+        self.assertEqual(participant.github_username, 'colliding_user')
+        self.assertTrue(participant.user.username.startswith('colliding_user_77777_'))
 
 
 class HealthCheckTestCase(TestCase):

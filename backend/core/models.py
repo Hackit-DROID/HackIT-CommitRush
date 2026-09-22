@@ -245,6 +245,11 @@ class PullRequest(models.Model):
         help_text='Head commit SHA of the pull request branch',
     )
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['repo', 'number'], name='pr_repo_number_idx'),
+        ]
+
     def __str__(self):
         return f"PR #{self.number} ({self.repo.full_name})"
 
@@ -334,6 +339,7 @@ class Contribution(models.Model):
             models.Index(fields=['status'], name='contrib_status_idx'),
             models.Index(fields=['issue'], name='contrib_issue_idx'),
             models.Index(fields=['-is_priority', 'approved_at', 'id'], name='contrib_merge_prio_idx'),
+            models.Index(fields=['participant', '-created_at'], name='contrib_part_created_idx'),
         ]
 
     def __str__(self):
@@ -431,6 +437,92 @@ class DailyContributionUsage(models.Model):
         return f"Usage for {self.participant.github_username} on {self.date}"
 
 
+class ScoringBreakdown(models.Model):
+    """
+    Auditable, reproducible record of points calculation for a contribution.
+    PRD §14, §15, Section 9, 10, 11.
+    Answers: "Why did this PR receive X points?"
+    """
+    contribution = models.OneToOneField(
+        Contribution,
+        on_delete=models.CASCADE,
+        related_name='scoring_breakdown',
+        help_text='Associated contribution',
+    )
+    point_transaction = models.OneToOneField(
+        PointTransaction,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='scoring_breakdown',
+        help_text='Linked point transaction in ledger',
+    )
+    base_points = models.IntegerField(
+        help_text='Initial base points evaluated from issue',
+    )
+    category = models.CharField(
+        max_length=100,
+        help_text='Classification category slug (e.g. feature, bug, docs)',
+    )
+    category_label = models.CharField(
+        max_length=100,
+        help_text='Human-readable category label (e.g. Feature, Bug Fix, Documentation)',
+    )
+    multiplier = models.FloatField(
+        default=1.0,
+        help_text='Configured multiplier applied to base points',
+    )
+    calculated_points = models.IntegerField(
+        help_text='Points after multiplying base points: round(base_points * multiplier)',
+    )
+    per_pr_cap = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text='Per-PR point cap from EventConfig (if enabled)',
+    )
+    points_after_pr_cap = models.IntegerField(
+        help_text='Calculated points capped at per_pr_cap',
+    )
+    daily_points_cap = models.IntegerField(
+        help_text='Daily points cap in effect at evaluation',
+    )
+    daily_points_before = models.IntegerField(
+        default=0,
+        help_text='Points already earned by participant on this date before this PR',
+    )
+    daily_allowance_remaining = models.IntegerField(
+        default=0,
+        help_text='Remaining daily point allowance before this PR',
+    )
+    cap_applied = models.CharField(
+        max_length=100,
+        default='Not reached',
+        help_text='Description of cap applied: Not reached, Daily limit, Daily contribution limit, Per-PR cap',
+    )
+    final_awarded_points = models.IntegerField(
+        default=0,
+        help_text='Actual points awarded to participant ledger balance',
+    )
+    farming_signals = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Farming pattern and velocity heuristics detected for admin review',
+    )
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text='Calculation timestamp',
+    )
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['created_at'], name='scoring_created_at_idx'),
+            models.Index(fields=['category'], name='scoring_category_idx'),
+        ]
+
+    def __str__(self):
+        return f"Scoring for Contribution #{self.contribution_id}: {self.final_awarded_points} pts ({self.category_label}, {self.multiplier}x)"
+
+
 class EventConfig(models.Model):
     """
     Singleton runtime config.
@@ -448,6 +540,19 @@ class EventConfig(models.Model):
     max_points_per_day = models.IntegerField(
         default=500,
         help_text='Daily points cap per participant',
+    )
+    per_pr_max_points = models.IntegerField(
+        default=100,
+        help_text='Maximum points allowed per single pull request',
+    )
+    category_multipliers = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text='Configurable multipliers by category (e.g. {"feature": 1.5, "bug": 1.0, "docs": 0.8})',
+    )
+    allow_partial_daily_points = models.BooleanField(
+        default=True,
+        help_text='Whether to award partial points up to remaining daily allowance when cap would be exceeded',
     )
     merge_paused = models.BooleanField(
         default=False,
@@ -478,6 +583,18 @@ class EventConfig(models.Model):
 
     def __str__(self):
         return f"EventConfig (Status: {self.event_status})"
+
+    def get_category_multiplier(self, category_key: str) -> float:
+        from core.categories import DEFAULT_CATEGORY_MULTIPLIERS
+        key = (category_key or '').lower()
+        if self.category_multipliers and key in self.category_multipliers:
+            try:
+                val = float(self.category_multipliers[key])
+                if val > 0:
+                    return val
+            except (ValueError, TypeError):
+                pass
+        return DEFAULT_CATEGORY_MULTIPLIERS.get(key, 1.0)
 
     def save(self, *args, **kwargs):
         self.pk = 1
@@ -515,12 +632,16 @@ class EventConfig(models.Model):
         """
         Retrieve or initialize the singleton configuration row with primary key 1.
         """
+        from core.categories import DEFAULT_CATEGORY_MULTIPLIERS
         obj, _ = cls.objects.get_or_create(
             pk=1,
             defaults={
                 'merge_concurrency': 5,
                 'max_contributions_per_day': 5,
                 'max_points_per_day': 500,
+                'per_pr_max_points': 100,
+                'category_multipliers': DEFAULT_CATEGORY_MULTIPLIERS,
+                'allow_partial_daily_points': True,
                 'merge_paused': False,
                 'validation_paused': False,
                 'submissions_paused': False,
@@ -542,6 +663,7 @@ class EventConfig(models.Model):
 @receiver(pre_delete, sender=EventConfig)
 def prevent_event_config_deletion(sender, instance, **kwargs):
     raise IntegrityError("The EventConfig singleton instance cannot be deleted.")
+
 
 
 class WebhookEvent(models.Model):

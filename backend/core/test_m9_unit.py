@@ -43,6 +43,8 @@ class M9T1PointAwardUnitTests(TestCase):
         self.config = EventConfig.get_solo()
         self.config.max_contributions_per_day = 5
         self.config.max_points_per_day = 100
+        self.config.category_multipliers = {'feature': 1.0}
+        self.config.allow_partial_daily_points = False
         self.config.save()
 
         self.user = User.objects.create_user(username='unit_tester', password='pass123Word!')
@@ -186,7 +188,7 @@ class M9T1PointAwardUnitTests(TestCase):
                 status='AWARDED',
             )
 
-    @patch('core.points.DailyContributionUsage.objects.select_for_update')
+    @patch('core.scoring.engine.DailyContributionUsage.objects.select_for_update')
     def test_transaction_rollback_preserves_atomic_state(self, mock_usage_select):
         """Simulated DB failure during award transaction cleanly rolls back all modifications."""
         mock_usage_select.side_effect = Exception("Simulated database deadlock")

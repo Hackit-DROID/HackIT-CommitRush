@@ -4,9 +4,13 @@ import urllib.parse
 import requests
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 from django.db import transaction
 
 from core.models import Participant
+
+OAUTH_STATE_SALT = 'core.oauth.state'
+OAUTH_STATE_MAX_AGE = 600  # 10 minutes
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -44,6 +48,24 @@ class OAuthProfileError(OAuthError):
 def generate_oauth_state() -> str:
     """Generate a cryptographically secure URL-safe random state token."""
     return secrets.token_urlsafe(32)
+
+
+def sign_oauth_state(raw_state: str) -> str:
+    """
+    Cryptographically sign the state token with a timestamp using settings.SECRET_KEY.
+    Ensures state integrity and enables tamper-proof, time-bounded verification.
+    """
+    signer = TimestampSigner(salt=OAUTH_STATE_SALT)
+    return signer.sign(raw_state)
+
+
+def unsign_oauth_state(signed_state: str, max_age: int = OAUTH_STATE_MAX_AGE) -> str:
+    """
+    Verify and unsign state token, ensuring it has not expired and has not been tampered with.
+    Raises BadSignature or SignatureExpired on verification failure.
+    """
+    signer = TimestampSigner(salt=OAUTH_STATE_SALT)
+    return signer.unsign(signed_state, max_age=max_age)
 
 
 def build_github_authorize_url(state: str) -> str:
@@ -198,10 +220,15 @@ def get_or_create_participant_from_github(user_info: dict) -> tuple[Participant,
             return participant, False
 
         # Create new Django User and Participant
-        # Ensure Django User username uniqueness
-        desired_username = github_username
+        # Ensure Django User username uniqueness and length boundary (max 150 chars)
+        desired_username = github_username[:150]
         if User.objects.filter(username=desired_username).exists():
-            desired_username = f"{github_username}_{github_id}"
+            base_name = f"{github_username}_{github_id}"[:140]
+            desired_username = base_name
+            counter = 1
+            while User.objects.filter(username=desired_username).exists():
+                desired_username = f"{base_name}_{counter}"[:150]
+                counter += 1
 
         user = User.objects.create_user(
             username=desired_username,

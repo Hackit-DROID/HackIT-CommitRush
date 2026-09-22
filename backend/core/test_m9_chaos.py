@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.contrib.auth import get_user_model
-from django.db import close_old_connections
+from django.db import connection, close_old_connections
 from django.test import TransactionTestCase, TestCase
 from django.utils import timezone
 
@@ -63,6 +63,8 @@ class M9T4ChaosAndFailureTests(TransactionTestCase):
         self.config.leaderboard_frozen = False
         self.config.max_contributions_per_day = 2
         self.config.max_points_per_day = 100
+        self.config.category_multipliers = {'feature': 1.0}
+        self.config.allow_partial_daily_points = False
         self.config.merge_concurrency = 5
         self.config.save()
 
@@ -329,7 +331,8 @@ class M9T4ChaosAndFailureTests(TransactionTestCase):
             finally:
                 close_old_connections()
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        max_workers = 1 if connection.vendor == 'sqlite' else 5
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(run_merge, c.id) for c in contributions]
             results = [f.result() for f in as_completed(futures)]
 

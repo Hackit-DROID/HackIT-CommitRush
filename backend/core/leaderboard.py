@@ -7,7 +7,8 @@ from django.db.models import F, Q, Window
 from django.db.models.functions import RowNumber
 from django.utils import timezone
 
-from core.models import EventConfig, Participant
+from core.models import DailyContributionUsage, EventConfig, Participant
+
 
 logger = logging.getLogger(__name__)
 
@@ -164,18 +165,36 @@ def fetch_leaderboard_data(page: int = 1, page_size: int = 20, current_participa
         if offset >= total_count and total_count > 0:
             results = []
         else:
-            qs = get_leaderboard_queryset()[offset : offset + page_size]
-            results = [
-                {
+            qs = list(get_leaderboard_queryset()[offset : offset + page_size])
+            today = timezone.now().date()
+            participant_ids = [row.id for row in qs]
+            daily_usages = {
+                u.participant_id: u
+                for u in DailyContributionUsage.objects.filter(participant_id__in=participant_ids, date=today)
+            }
+            daily_points_limit = config.max_points_per_day
+            daily_contrib_limit = config.max_contributions_per_day
+
+            results = []
+            for row in qs:
+                usage = daily_usages.get(row.id)
+                pts_today = usage.points_count if usage else 0
+                contribs_today = usage.contributions_count if usage else 0
+                rem_allowance = max(0, daily_points_limit - pts_today)
+                limit_hit = (pts_today >= daily_points_limit) or (contribs_today >= daily_contrib_limit)
+
+                results.append({
                     'rank': row.rank,
                     'participant_id': row.id,
                     'github_username': row.github_username,
                     'avatar_url': row.avatar_url,
                     'total_points': row.total_points,
                     'merged_count': row.merged_count,
-                }
-                for row in qs
-            ]
+                    'points_today': pts_today,
+                    'daily_limit': daily_points_limit,
+                    'remaining_daily_allowance': rem_allowance,
+                    'is_daily_limit_reached': limit_hit,
+                })
 
         page_data = {
             'count': total_count,
@@ -190,6 +209,15 @@ def fetch_leaderboard_data(page: int = 1, page_size: int = 20, current_participa
     if current_participant is not None:
         rank = calculate_participant_rank(current_participant.id)
         if rank is not None:
+            today = timezone.now().date()
+            me_usage = DailyContributionUsage.objects.filter(participant=current_participant, date=today).first()
+            me_pts_today = me_usage.points_count if me_usage else 0
+            me_contribs_today = me_usage.contributions_count if me_usage else 0
+            me_daily_points_limit = config.max_points_per_day
+            me_daily_contrib_limit = config.max_contributions_per_day
+            me_rem = max(0, me_daily_points_limit - me_pts_today)
+            me_limit_hit = (me_pts_today >= me_daily_points_limit) or (me_contribs_today >= me_daily_contrib_limit)
+
             me_data = {
                 'rank': rank,
                 'participant_id': current_participant.id,
@@ -197,7 +225,12 @@ def fetch_leaderboard_data(page: int = 1, page_size: int = 20, current_participa
                 'avatar_url': current_participant.avatar_url,
                 'total_points': current_participant.total_points,
                 'merged_count': current_participant.merged_count,
+                'points_today': me_pts_today,
+                'daily_limit': me_daily_points_limit,
+                'remaining_daily_allowance': me_rem,
+                'is_daily_limit_reached': me_limit_hit,
             }
+
 
     return {
         'count': count,

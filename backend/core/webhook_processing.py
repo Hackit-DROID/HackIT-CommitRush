@@ -220,24 +220,32 @@ def handle_pull_request_event(payload: dict) -> dict:
 
                 contributions = list(Contribution.objects.filter(pull_request=pr_obj))
                 if not contributions and participant:
-                    # Catch-up for missed opened webhook: link matching issue
-                    title = pr_data.get('title') or ''
-                    body = pr_data.get('body') or ''
-                    head_ref = (pr_data.get('head') or {}).get('ref') or ''
-                    extracted_numbers = extract_issue_numbers(f"{title} {body} {head_ref}")
-                    if extracted_numbers:
-                        matching_issue = Issue.objects.filter(
-                            project=project,
-                            number__in=extracted_numbers,
-                        ).order_by('id').first()
-                        if matching_issue:
-                            contrib = Contribution.objects.create(
-                                participant=participant,
-                                pull_request=pr_obj,
-                                issue=matching_issue,
-                                status='PENDING',
-                            )
-                            contributions = [contrib]
+                    # Catch-up for missed opened webhook: link matching issue if submissions not paused
+                    config = EventConfig.get_solo()
+                    if config.submissions_paused:
+                        logger.info(
+                            "Submissions are paused (EventConfig.submissions_paused=True); skipping catch-up contribution creation for PR #%d in %s",
+                            pr_number,
+                            project.full_name,
+                        )
+                    else:
+                        title = pr_data.get('title') or ''
+                        body = pr_data.get('body') or ''
+                        head_ref = (pr_data.get('head') or {}).get('ref') or ''
+                        extracted_numbers = extract_issue_numbers(f"{title} {body} {head_ref}")
+                        if extracted_numbers:
+                            matching_issue = Issue.objects.filter(
+                                project=project,
+                                number__in=extracted_numbers,
+                            ).order_by('id').first()
+                            if matching_issue:
+                                contrib = Contribution.objects.create(
+                                    participant=participant,
+                                    pull_request=pr_obj,
+                                    issue=matching_issue,
+                                    status='PENDING',
+                                )
+                                contributions = [contrib]
 
                 # Transition associated contributions to MERGED via state machine and trigger transactional point award
                 from core.state_machine import transition_contribution
@@ -264,24 +272,32 @@ def handle_pull_request_event(payload: dict) -> dict:
 
                 contributions = list(Contribution.objects.filter(pull_request=pr_obj))
                 if not contributions and participant:
-                    # Catch-up for missed opened webhook: link matching issue
-                    title = pr_data.get('title') or ''
-                    body = pr_data.get('body') or ''
-                    head_ref = (pr_data.get('head') or {}).get('ref') or ''
-                    extracted_numbers = extract_issue_numbers(f"{title} {body} {head_ref}")
-                    if extracted_numbers:
-                        matching_issue = Issue.objects.filter(
-                            project=project,
-                            number__in=extracted_numbers,
-                        ).order_by('id').first()
-                        if matching_issue:
-                            contrib = Contribution.objects.create(
-                                participant=participant,
-                                pull_request=pr_obj,
-                                issue=matching_issue,
-                                status='PENDING',
-                            )
-                            contributions = [contrib]
+                    # Catch-up for missed opened webhook: link matching issue if submissions not paused
+                    config = EventConfig.get_solo()
+                    if config.submissions_paused:
+                        logger.info(
+                            "Submissions are paused (EventConfig.submissions_paused=True); skipping catch-up contribution creation for PR #%d in %s",
+                            pr_number,
+                            project.full_name,
+                        )
+                    else:
+                        title = pr_data.get('title') or ''
+                        body = pr_data.get('body') or ''
+                        head_ref = (pr_data.get('head') or {}).get('ref') or ''
+                        extracted_numbers = extract_issue_numbers(f"{title} {body} {head_ref}")
+                        if extracted_numbers:
+                            matching_issue = Issue.objects.filter(
+                                project=project,
+                                number__in=extracted_numbers,
+                            ).order_by('id').first()
+                            if matching_issue:
+                                contrib = Contribution.objects.create(
+                                    participant=participant,
+                                    pull_request=pr_obj,
+                                    issue=matching_issue,
+                                    status='PENDING',
+                                )
+                                contributions = [contrib]
 
                 # Transition associated contributions to REJECTED (closed without merge) via state machine
                 from core.state_machine import transition_contribution

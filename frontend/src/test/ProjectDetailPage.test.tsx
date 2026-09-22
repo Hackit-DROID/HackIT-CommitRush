@@ -30,58 +30,82 @@ describe('ProjectDetailPage', () => {
 
   it('renders loading skeleton initially', () => {
     globalThis.fetch = vi.fn().mockImplementation(() => new Promise(() => {}));
-    renderWithProviders('hackit/backend-core');
+    renderWithProviders('AI_Data_Analyst_Agent');
     expect(screen.getByTestId('project-detail-skeleton')).toBeInTheDocument();
   });
 
-  it('renders project metadata, issue counts, and contribution activity', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        id: 1,
-        github_repo_id: 101,
-        owner: 'hackit',
-        name: 'backend-core',
-        full_name: 'hackit/backend-core',
-        language: 'Python',
-        is_enabled: true,
-        description: 'Core backend service for CommitRush',
-        issue_count: 15,
-        open_issue_count: 10,
-        contribution_activity: {
-          total_contributions: 8,
-          merged_contributions: 5,
-          in_progress_contributions: 3,
-        },
-      }),
-    } as Response);
+  it('renders project files from GitHub monorepo', async () => {
+    // The detail page makes two fetch calls:
+    // 1. Directory contents
+    // 2. README.md raw content
+    globalThis.fetch = vi.fn().mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('raw.githubusercontent.com')) {
+        return Promise.resolve({
+          ok: true,
+          text: async () => '# AI Data Analyst Agent\n\nA data analysis tool.',
+        });
+      }
+      // Directory contents
+      return Promise.resolve({
+        ok: true,
+        json: async () => [
+          {
+            name: 'app.py',
+            path: 'AI_Data_Analyst_Agent/app.py',
+            sha: 'sha-app',
+            size: 2048,
+            url: 'https://api.github.com/repos/Hackit-DROID/Open-Source-Contribution-Drive/contents/AI_Data_Analyst_Agent/app.py',
+            html_url: 'https://github.com/Hackit-DROID/Open-Source-Contribution-Drive/blob/main/AI_Data_Analyst_Agent/app.py',
+            git_url: '',
+            type: 'file',
+          },
+          {
+            name: 'requirements.txt',
+            path: 'AI_Data_Analyst_Agent/requirements.txt',
+            sha: 'sha-req',
+            size: 256,
+            url: '',
+            html_url: '',
+            git_url: '',
+            type: 'file',
+          },
+          {
+            name: 'README.md',
+            path: 'AI_Data_Analyst_Agent/README.md',
+            sha: 'sha-readme',
+            size: 512,
+            url: '',
+            html_url: '',
+            git_url: '',
+            type: 'file',
+          },
+        ],
+      });
+    });
 
-    renderWithProviders('hackit/backend-core');
+    renderWithProviders('AI_Data_Analyst_Agent');
 
     await waitFor(() => {
-      expect(screen.getByText('backend-core')).toBeInTheDocument();
-      expect(screen.getByText('hackit')).toBeInTheDocument();
-      expect(screen.getByText('Core backend service for CommitRush')).toBeInTheDocument();
-      expect(screen.getByText('15')).toBeInTheDocument();
-      expect(screen.getByText(/10 open for contributions/i)).toBeInTheDocument();
-      expect(screen.getByText('5')).toBeInTheDocument();
-      expect(screen.getByText('3')).toBeInTheDocument();
+      expect(screen.getByTestId('project-detail-view')).toBeInTheDocument();
+      expect(screen.getByText('AI Data Analyst Agent')).toBeInTheDocument();
+      expect(screen.getByText('app.py')).toBeInTheDocument();
+      expect(screen.getByText('requirements.txt')).toBeInTheDocument();
+      expect(screen.getByText('README.md')).toBeInTheDocument();
     });
   });
 
-  it('renders 404 not found error state when project does not exist', async () => {
+  it('renders error state when project directory does not exist', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 404,
       statusText: 'Not Found',
-      json: async () => ({ detail: "Project 'nonexistent' not found." }),
+      json: async () => ({ message: 'Not Found' }),
     } as Response);
 
     renderWithProviders('nonexistent');
 
     await waitFor(() => {
       expect(screen.getByTestId('error-state')).toBeInTheDocument();
-      expect(screen.getByText('Resource Not Found')).toBeInTheDocument();
     });
   });
 });

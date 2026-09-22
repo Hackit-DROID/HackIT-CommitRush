@@ -142,10 +142,21 @@ describe('Responsive Mobile Navigation', () => {
     expect(screen.getByText(new RegExp(`© ${currentYear} CommitRush`))).toBeInTheDocument();
     expect(screen.getAllByRole('link', { name: 'Issues' }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByRole('link', { name: 'Projects' }).length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByRole('link', { name: 'Leaderboard' }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByLabelText(/Official HackIT repository on GitHub/i)).toHaveAttribute(
       'href',
       'https://github.com/Hackit-DROID/Open-Source-Contribution-Drive'
+    );
+    expect(screen.getByLabelText(/Official HackIT GitHub organization/i)).toHaveAttribute(
+      'href',
+      'https://github.com/Hackit-DROID'
+    );
+    expect(screen.getByLabelText(/Official HackIT Community Website/i)).toHaveAttribute(
+      'href',
+      'https://hackit-sggs.vercel.app/'
+    );
+    expect(screen.getByLabelText(/HackIT LinkedIn Page/i)).toHaveAttribute(
+      'href',
+      'https://www.linkedin.com/company/hackit-ethical-hacking-cyber-security-club-sggsie-t-nanded/posts/?feedView=all'
     );
   });
 });

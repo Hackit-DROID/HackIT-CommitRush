@@ -55,31 +55,31 @@ export function MyContributionsPage() {
   return (
     <div className="space-y-6">
       {/* Header section */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#d8d8d3] pb-5">
         <div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white flex items-center gap-3">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#111111] flex items-center gap-3">
             <span>My Contributions</span>
             {data && (
-              <span className="text-xs px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 font-mono font-medium border border-slate-700">
+              <span className="text-xs px-2.5 py-1 rounded-[4px] bg-[#f4f4f1] text-[#111111] font-mono font-medium border border-[#d8d8d3]">
                 {data.count} {data.count === 1 ? 'total' : 'total'}
               </span>
             )}
           </h1>
-          <p className="text-sm text-slate-400 mt-1">
+          <p className="text-sm text-[#555555] mt-1 font-sans">
             Track real-time validation, approval, merge queue state, and points for your sprint contributions.
           </p>
         </div>
 
         {/* Live status polling indicator */}
-        <div className="flex items-center gap-2 text-xs text-slate-400 bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-800">
-          <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+        <div className="flex items-center gap-2 text-xs font-mono text-[#555555] bg-white px-3 py-1.5 rounded-[4px] border border-[#d8d8d3]">
+          <span className="w-2 h-2 rounded-full bg-[#ff5a1f] animate-pulse" />
           <span>Real-time state sync</span>
         </div>
       </div>
 
       {/* Filter controls */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-medium text-slate-400 uppercase tracking-wider mr-1">
+        <span className="text-xs font-mono font-medium text-[#777777] uppercase tracking-wider mr-1">
           Status:
         </span>
         {STATUS_FILTER_OPTIONS.map((opt) => {
@@ -89,10 +89,10 @@ export function MyContributionsPage() {
               key={opt.value}
               type="button"
               onClick={() => updateStatusFilter(opt.value)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              className={`px-3.5 py-1.5 rounded-[4px] text-xs font-mono font-medium transition-all cursor-pointer ${
                 isActive
-                  ? 'bg-cyan-950 text-cyan-300 border border-cyan-700/80 shadow-sm'
-                  : 'bg-slate-900/80 text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-800'
+                  ? 'bg-[#050505] text-white border border-[#050505] shadow-sm'
+                  : 'bg-white text-[#555555] hover:text-[#111111] hover:bg-[#f4f4f1] border border-[#d8d8d3]'
               }`}
             >
               {opt.label}
@@ -143,27 +143,27 @@ export function MyContributionsPage() {
               return (
                 <div
                   key={item.id}
-                  className="bg-slate-900/70 hover:bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl p-5 transition-all space-y-3 group"
+                  className="bg-white hover:border-[#111111] border border-[#d8d8d3] rounded-md p-5 sm:p-6 transition-all space-y-4 group shadow-sm"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                    <div className="space-y-1.5 flex-1">
+                    <div className="space-y-1.5 flex-1 min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <Link
                           to={`/contributions/${item.id}`}
-                          className="text-base font-semibold text-white group-hover:text-cyan-400 transition-colors"
+                          className="text-base font-bold text-[#111111] group-hover:text-[#ff5a1f] transition-colors break-words focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ff5a1f] rounded-sm"
                         >
                           {item.issue?.title || `Contribution #${item.id}`}
                         </Link>
                         {item.issue?.points !== undefined && (
-                          <span className="text-xs px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800 font-mono font-medium">
+                          <span className="text-xs px-2.5 py-0.5 rounded-[4px] bg-[#f4f4f1] text-[#111111] border border-[#d8d8d3] font-mono font-medium tabular-nums">
                             {`${item.issue.points} pts`}
                           </span>
                         )}
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#777777] font-mono">
                         {item.pull_request?.repo && (
-                          <span className="font-mono text-slate-300">
+                          <span className="text-[#111111] truncate max-w-[200px] sm:max-w-xs">
                             {item.pull_request.repo}
                           </span>
                         )}
@@ -180,7 +180,7 @@ export function MyContributionsPage() {
                       </div>
                     </div>
 
-                    <div className="flex flex-col sm:items-end gap-1">
+                    <div className="flex flex-col sm:items-end gap-1 shrink-0">
                       <ContributionStatusBadge
                         status={item.status}
                         subStatus={item.sub_status}
@@ -190,27 +190,27 @@ export function MyContributionsPage() {
                   </div>
 
                   {/* One-line status explanation */}
-                  <div className="text-xs text-slate-400 bg-slate-950/60 rounded-lg p-2.5 border border-slate-800/80 flex items-start gap-2">
-                    <span className="text-cyan-400 font-semibold uppercase text-[10px] tracking-wider mt-0.5">
+                  <div className="text-xs text-[#555555] bg-[#f4f4f1] rounded-[4px] p-3 border border-[#d8d8d3] flex items-start gap-2 font-mono">
+                    <span className="text-[#111111] font-semibold uppercase text-[10px] tracking-wider mt-0.5">
                       Status Info:
                     </span>
-                    <span className="flex-1">{meta.description}</span>
+                    <span className="flex-1 font-sans text-[#555555]">{meta.description}</span>
                   </div>
 
                   {/* Flagged reason or retry count notice if present */}
                   {item.flagged_reason && (
-                    <div className="text-xs text-amber-300 bg-amber-950/40 rounded-lg p-2.5 border border-amber-800/50">
+                    <div className="text-xs text-amber-900 bg-amber-50 rounded-[4px] p-3 border border-amber-200 font-mono">
                       <span className="font-semibold">Review note: </span>
                       <span>{item.flagged_reason}</span>
                     </div>
                   )}
 
                   {/* Metadata and links footer */}
-                  <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/60 text-xs text-slate-400">
+                  <div className="pt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[#d8d8d3] text-xs text-[#777777] font-mono">
                     <div className="flex items-center gap-3">
                       <span>Submitted: {new Date(item.created_at).toLocaleDateString()}</span>
                       {item.retry_count > 0 && (
-                        <span className="text-orange-400 font-mono">
+                        <span className="text-[#ff5a1f] font-mono">
                           Retries: {item.retry_count}
                         </span>
                       )}
@@ -222,7 +222,7 @@ export function MyContributionsPage() {
                           href={item.pull_request.github_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-slate-400 hover:text-cyan-400 transition-colors inline-flex items-center gap-1"
+                          className="text-[#777777] hover:text-[#111111] transition-colors inline-flex items-center gap-1 font-mono focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ff5a1f] rounded-sm"
                         >
                           <span>GitHub PR</span>
                           <svg
@@ -242,7 +242,7 @@ export function MyContributionsPage() {
                       )}
                       <Link
                         to={`/contributions/${item.id}`}
-                        className="text-cyan-400 hover:text-cyan-300 font-medium"
+                        className="text-[#111111] hover:text-[#ff5a1f] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ff5a1f] rounded-sm"
                       >
                         View Details &rarr;
                       </Link>
@@ -255,7 +255,7 @@ export function MyContributionsPage() {
 
           {/* Pagination Controls */}
           {totalPages > 1 && (
-            <div className="flex items-center justify-between pt-4 border-t border-slate-800 text-xs text-slate-400">
+            <div className="flex items-center justify-between pt-4 border-t border-[#d8d8d3] text-xs text-[#777777] font-mono">
               <div>
                 Page {filters.page} of {totalPages} ({data.count} contributions)
               </div>
@@ -264,7 +264,7 @@ export function MyContributionsPage() {
                   type="button"
                   disabled={filters.page <= 1}
                   onClick={() => setPage(filters.page - 1)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-slate-200"
+                  className="px-3.5 py-1.5 rounded-[4px] bg-white border border-[#d8d8d3] hover:bg-[#f4f4f1] hover:border-[#111111] disabled:opacity-40 disabled:cursor-not-allowed text-[#111111] transition-colors cursor-pointer"
                 >
                   &larr; Previous
                 </button>
@@ -272,7 +272,7 @@ export function MyContributionsPage() {
                   type="button"
                   disabled={filters.page >= totalPages}
                   onClick={() => setPage(filters.page + 1)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed text-slate-200"
+                  className="px-3.5 py-1.5 rounded-[4px] bg-white border border-[#d8d8d3] hover:bg-[#f4f4f1] hover:border-[#111111] disabled:opacity-40 disabled:cursor-not-allowed text-[#111111] transition-colors cursor-pointer"
                 >
                   Next &rarr;
                 </button>

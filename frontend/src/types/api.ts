@@ -43,6 +43,12 @@ export interface IssueListItem {
   created_at?: string;
 }
 
+export interface IssueCategoryItem {
+  value: string;
+  label: string;
+  count?: number;
+}
+
 export interface IssueDetail extends IssueListItem {
   github_issue_id: number;
   project_id: number;
@@ -114,6 +120,24 @@ export interface ContributionPullRequest {
   github_url: string;
 }
 
+export interface ScoringBreakdown {
+  id: number;
+  base_points: number;
+  category: string;
+  category_label: string;
+  multiplier: number;
+  calculated_points: number;
+  per_pr_cap: number | null;
+  points_after_pr_cap: number;
+  daily_points_cap: number;
+  daily_points_before: number;
+  daily_allowance_remaining: number;
+  cap_applied: string;
+  final_awarded_points: number;
+  farming_signals: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface Contribution {
   id: number;
   participant: ContributionParticipant;
@@ -124,6 +148,7 @@ export interface Contribution {
   status_message?: string;
   retry_count: number;
   flagged_reason: string;
+  scoring_breakdown?: ScoringBreakdown | null;
   approved_at: string | null;
   merged_at: string | null;
   created_at: string;
@@ -147,6 +172,10 @@ export interface LeaderboardEntry {
   avatar_url: string | null;
   total_points: number;
   merged_count: number;
+  points_today?: number;
+  daily_limit?: number;
+  remaining_daily_allowance?: number;
+  is_daily_limit_reached?: boolean;
 }
 
 export interface LeaderboardMe {
@@ -156,7 +185,12 @@ export interface LeaderboardMe {
   avatar_url: string | null;
   total_points: number;
   merged_count: number;
+  points_today?: number;
+  daily_limit?: number;
+  remaining_daily_allowance?: number;
+  is_daily_limit_reached?: boolean;
 }
+
 
 export interface LeaderboardResponse {
   count: number;

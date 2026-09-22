@@ -17,42 +17,38 @@ export function NotFoundPage() {
       data-testid="not-found-page"
     >
       <div className="relative max-w-2xl w-full text-center space-y-8">
-        {/* Glow ambient background effects */}
-        <div className="absolute -top-16 left-1/2 -translate-x-1/2 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-16 left-1/2 -translate-x-1/2 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-
-        {/* 404 Glitch Badge */}
-        <div className="relative inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-900 border border-slate-700/80 text-xs font-mono text-cyan-400 shadow-xl">
-          <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+        {/* 404 Status Badge */}
+        <div className="relative inline-flex items-center gap-2 px-3.5 py-1 rounded-[4px] bg-[#f4f4f1] border border-[#d8d8d3] text-xs font-mono text-[#ff5a1f]">
+          <span className="w-2 h-2 rounded-full bg-[#ff5a1f]" />
           <span>ERR_COMMIT_NOT_FOUND • 404</span>
         </div>
 
         {/* Massive 404 Title */}
         <div className="space-y-2">
-          <h1 className="text-7xl sm:text-8xl lg:text-9xl font-black text-transparent bg-clip-text bg-gradient-to-b from-white via-slate-200 to-slate-500 tracking-tight font-mono select-none">
+          <h1 className="text-7xl sm:text-8xl lg:text-9xl font-bold text-[#111111] tracking-tight select-none">
             404
           </h1>
-          <h2 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
+          <h2 className="text-2xl sm:text-3xl font-bold text-[#111111] tracking-tight">
             Lost in the Commit Tree
           </h2>
-          <p className="text-slate-400 text-sm sm:text-base max-w-md mx-auto leading-relaxed">
+          <p className="text-[#555555] text-sm sm:text-base max-w-md mx-auto leading-relaxed font-sans">
             The branch, pull request, or page you were navigating to does not exist,
             has been merged, or was relocated.
           </p>
         </div>
 
         {/* Terminal Box */}
-        <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 max-w-md mx-auto text-left font-mono text-xs shadow-2xl overflow-x-auto">
-          <div className="flex items-center gap-1.5 pb-2.5 mb-2.5 border-b border-slate-800/80 text-slate-500">
-            <div className="w-2.5 h-2.5 rounded-full bg-rose-500/60" />
-            <div className="w-2.5 h-2.5 rounded-full bg-amber-500/60" />
-            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/60" />
-            <span className="ml-2 text-[10px] text-slate-500">bash — commitrush-cli</span>
+        <div className="bg-white border border-[#d8d8d3] rounded-md p-5 max-w-md mx-auto text-left font-mono text-xs shadow-sm overflow-x-auto">
+          <div className="flex items-center gap-1.5 pb-3 mb-3 border-b border-[#d8d8d3] text-[#777777]">
+            <div className="w-2.5 h-2.5 rounded-full bg-[#d8d8d3]" />
+            <div className="w-2.5 h-2.5 rounded-full bg-[#d8d8d3]" />
+            <div className="w-2.5 h-2.5 rounded-full bg-[#d8d8d3]" />
+            <span className="ml-2 text-[10px] text-[#777777] font-mono">bash — commitrush-cli</span>
           </div>
-          <p className="text-slate-400">
-            <span className="text-cyan-400">$</span> git checkout HEAD~1 --path &quot;{location.pathname}&quot;
+          <p className="text-[#111111]">
+            <span className="text-[#ff5a1f]">$</span> git checkout HEAD~1 --path &quot;{location.pathname}&quot;
           </p>
-          <p className="text-rose-400/90 pt-1">
+          <p className="text-[#ff5a1f] pt-1.5">
             fatal: pathspec &apos;{location.pathname}&apos; did not match any file(s) known to git
           </p>
         </div>
@@ -62,7 +58,7 @@ export function NotFoundPage() {
           {user?.is_authenticated ? (
             <Link
               to="/profile"
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs transition-all shadow-lg shadow-cyan-500/20 hover:scale-105 active:scale-95"
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-[4px] bg-[#050505] hover:bg-[#222222] text-white font-sans font-semibold text-xs transition-all shadow-sm active:scale-95 cursor-pointer"
               data-testid="not-found-home-btn"
             >
               <span>👤</span>
@@ -71,7 +67,7 @@ export function NotFoundPage() {
           ) : (
             <Link
               to="/"
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs transition-all shadow-lg shadow-cyan-500/20 hover:scale-105 active:scale-95"
+              className="inline-flex items-center gap-2 px-6 py-3 rounded-[4px] bg-[#050505] hover:bg-[#222222] text-white font-sans font-semibold text-xs transition-all shadow-sm active:scale-95 cursor-pointer"
               data-testid="not-found-home-btn"
             >
               <span>🏠</span>
@@ -81,7 +77,7 @@ export function NotFoundPage() {
 
           <Link
             to="/issues"
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white font-semibold text-xs border border-slate-700/80 transition-colors shadow-sm"
+            className="inline-flex items-center gap-2 px-5 py-3 rounded-[4px] bg-white hover:bg-[#f4f4f1] text-[#111111] font-sans font-medium text-xs border border-[#d8d8d3] hover:border-[#111111] transition-colors shadow-sm cursor-pointer"
             data-testid="not-found-issues-btn"
           >
             <span>🎯</span>
@@ -90,7 +86,7 @@ export function NotFoundPage() {
 
           <Link
             to="/projects"
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white font-semibold text-xs border border-slate-700/80 transition-colors shadow-sm"
+            className="inline-flex items-center gap-2 px-5 py-3 rounded-[4px] bg-white hover:bg-[#f4f4f1] text-[#111111] font-sans font-medium text-xs border border-[#d8d8d3] hover:border-[#111111] transition-colors shadow-sm cursor-pointer"
             data-testid="not-found-projects-btn"
           >
             <span>📁</span>
@@ -99,7 +95,7 @@ export function NotFoundPage() {
 
           <Link
             to="/leaderboard"
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white font-semibold text-xs border border-slate-700/80 transition-colors shadow-sm"
+            className="inline-flex items-center gap-2 px-5 py-3 rounded-[4px] bg-white hover:bg-[#f4f4f1] text-[#111111] font-sans font-medium text-xs border border-[#d8d8d3] hover:border-[#111111] transition-colors shadow-sm cursor-pointer"
             data-testid="not-found-leaderboard-btn"
           >
             <span>🏆</span>

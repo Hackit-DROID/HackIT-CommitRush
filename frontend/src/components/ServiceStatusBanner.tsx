@@ -52,7 +52,7 @@ export function ServiceStatusBanner() {
       role="status"
       aria-live="polite"
       data-testid="service-status-banner"
-      className="border-b border-amber-900/60 bg-amber-950/90 text-amber-200 text-xs sm:text-sm font-medium py-2.5 px-4 sticky top-16 z-20 backdrop-blur"
+      className="border-b border-amber-300 bg-amber-50 text-amber-900 text-xs sm:text-sm font-medium py-2.5 px-4 sticky top-16 z-20 backdrop-blur"
     >
       <div className="max-w-7xl mx-auto flex flex-col gap-1.5">
         {notices.map((notice) => (

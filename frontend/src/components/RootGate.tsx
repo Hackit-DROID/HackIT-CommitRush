@@ -10,8 +10,8 @@ export function RootGate() {
     return (
       <div className="space-y-6" data-testid="root-loading">
         <div className="flex items-center gap-3 py-4">
-          <div className="w-5 h-5 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin" />
-          <span className="text-sm text-slate-400 font-mono">Initializing CommitRush...</span>
+          <div className="w-5 h-5 rounded-full border-2 border-[#ff5a1f] border-t-transparent animate-spin" />
+          <span className="text-sm text-[#555555] font-mono">Initializing CommitRush...</span>
         </div>
         <DashboardSkeleton />
       </div>
