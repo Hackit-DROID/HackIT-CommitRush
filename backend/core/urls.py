@@ -17,6 +17,7 @@ from core.api_views import (
     IssueCategoryListView,
     IssueDetailView,
     IssueListView,
+    LeaderboardExportView,
     LeaderboardView,
     MyContributionsListView,
     OpsMetricsView,
@@ -57,6 +58,7 @@ urlpatterns = [
     path('contributions/mine/', MyContributionsListView.as_view(), name='my-contributions-list'),
     path('contributions/<int:pk>/', ContributionDetailView.as_view(), name='contribution-detail'),
     # M7 Leaderboard, Dashboard, Profile & Stats (PRD §8.6, §16, Plan M7-T1, M7-T2, M7-T3, M7-T4, M7-T5)
+    path('leaderboard/export/', LeaderboardExportView.as_view(), name='leaderboard-export'),
     path('leaderboard/', LeaderboardView.as_view(), name='leaderboard'),
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
     path('profile/<str:username>/', PublicProfileView.as_view(), name='profile-detail'),

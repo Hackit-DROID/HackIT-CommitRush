@@ -1,0 +1,75 @@
+name: CommitRush Leaderboard Scoring
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  score_contribution:
+    name: Score Merged Contribution
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Process Merged Pull Request
+        id: scoring
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          MERGED_AT: ${{ github.event.pull_request.merged_at }}
+        run: |
+          python scripts/process_pr_scoring.py \
+            --author "$PR_AUTHOR" \
+            --pr-number "$PR_NUMBER" \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY" \
+            --base-branch "$BASE_BRANCH" \
+            --merged \
+            --merged-at "$MERGED_AT" \
+            --leaderboard-file leaderboard.json \
+            --output-file scoring_summary.md
+
+          # Append summary to GitHub Actions step summary
+          cat scoring_summary.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Post Scoring Comment to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            if (fs.existsSync('scoring_summary.md')) {
+              const summary = fs.readFileSync('scoring_summary.md', 'utf8');
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: summary
+              });
+            }
+
+      - name: Commit and Push Updated Leaderboard
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "CommitRush Leaderboard Bot"
+          git add leaderboard.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore(leaderboard): update standings for PR #${{ github.event.pull_request.number }} [skip ci]" && git push origin main)

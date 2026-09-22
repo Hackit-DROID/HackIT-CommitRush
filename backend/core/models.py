@@ -244,6 +244,12 @@ class PullRequest(models.Model):
         default='',
         help_text='Head commit SHA of the pull request branch',
     )
+    base_branch = models.CharField(
+        max_length=100,
+        blank=True,
+        default='main',
+        help_text='Target base branch of the pull request (normally main)',
+    )
 
     class Meta:
         indexes = [
@@ -538,12 +544,12 @@ class EventConfig(models.Model):
         help_text='Daily contribution credit cap per participant',
     )
     max_points_per_day = models.IntegerField(
-        default=500,
-        help_text='Daily points cap per participant',
+        default=120,
+        help_text='Daily points cap per participant (HackIT CommitRush rule: 120 points/day)',
     )
     per_pr_max_points = models.IntegerField(
-        default=100,
-        help_text='Maximum points allowed per single pull request',
+        default=50,
+        help_text='Maximum points allowed per single pull request (Master=50)',
     )
     category_multipliers = models.JSONField(
         default=dict,
@@ -551,8 +557,23 @@ class EventConfig(models.Model):
         help_text='Configurable multipliers by category (e.g. {"feature": 1.5, "bug": 1.0, "docs": 0.8})',
     )
     allow_partial_daily_points = models.BooleanField(
-        default=True,
-        help_text='Whether to award partial points up to remaining daily allowance when cap would be exceeded',
+        default=False,
+        help_text='Whether to award partial points up to remaining daily allowance (False: PR either earns full score or 0 if exceeding 120 cap)',
+    )
+    target_branch = models.CharField(
+        max_length=100,
+        default='main',
+        help_text='Designated target branch for contributions (normally main)',
+    )
+    event_start_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Official event start date (IST)',
+    )
+    event_end_date = models.DateField(
+        null=True,
+        blank=True,
+        help_text='Official event end date (IST)',
     )
     merge_paused = models.BooleanField(
         default=False,
@@ -594,6 +615,9 @@ class EventConfig(models.Model):
                     return val
             except (ValueError, TypeError):
                 pass
+        # If no custom multipliers are defined, default multiplier is 1.0 so difficulty values (5, 10, 20, 30, 50) are preserved
+        if not self.category_multipliers:
+            return 1.0
         return DEFAULT_CATEGORY_MULTIPLIERS.get(key, 1.0)
 
     def save(self, *args, **kwargs):

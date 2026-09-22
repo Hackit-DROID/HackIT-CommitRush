@@ -19,29 +19,41 @@ logger = logging.getLogger(__name__)
 
 ISSUE_REF_PATTERN = re.compile(r'(?:^|[\s(\[,/#])#?(\d+)\b')
 EXPLICIT_ISSUE_PATTERN = re.compile(
-    r'(?:fixes|fix|closes|close|resolves|resolve|fixed|closed|resolved|ref|refs|issue|issues)\s*:?\s*#?(\d+)\b',
+    r'(?:fixes|fix|closes|close|resolves|resolve|fixed|closed|resolved|ref|refs|issue|issues)\s*:?\s*(?:#|cr[-_]?)?(\d+)\b',
     re.IGNORECASE,
 )
+CR_ISSUE_PATTERN = re.compile(r'\bCR[-_]?(\d+)\b', re.IGNORECASE)
 
 
 def extract_issue_numbers(text: str | None) -> list[int]:
     """
     Extract issue numbers referenced in PR title, body, or branch name.
-    Prioritizes explicit keywords ('fixes #42', 'closes #10', etc.) before
-    generic '#42' patterns.
+    Supports standard GitHub #123, explicit keywords ('fixes #42', 'closes CR-901'),
+    and CommitRush tags ('[CR-901]', 'CR-1234', 'cr-42').
     Returns a deduplicated list of positive integers.
     """
     if not text:
         return []
 
     explicit_matches = EXPLICIT_ISSUE_PATTERN.findall(text)
+    cr_matches = CR_ISSUE_PATTERN.findall(text)
     generic_matches = re.findall(r'#(\d+)\b', text)
 
     seen = set()
     numbers = []
 
-    # First add explicit matches
+    # First add explicit keywords (e.g. fixes CR-901, closes #42)
     for m in explicit_matches:
+        try:
+            val = int(m)
+            if val > 0 and val not in seen:
+                seen.add(val)
+                numbers.append(val)
+        except (ValueError, TypeError):
+            continue
+
+    # Then add CommitRush issue patterns (e.g. CR-901, CR-1234)
+    for m in cr_matches:
         try:
             val = int(m)
             if val > 0 and val not in seen:
@@ -102,6 +114,7 @@ def handle_pull_request_event(payload: dict) -> dict:
     user_data = pr_data.get('user') or {}
     author_github_id = user_data.get('id') or 0
     head_sha = (pr_data.get('head') or {}).get('sha') or ''
+    base_ref = (pr_data.get('base') or {}).get('ref') or 'main'
     is_merged = bool(pr_data.get('merged', False))
     raw_merged_at = pr_data.get('merged_at')
     merged_at = parse_datetime(raw_merged_at) if raw_merged_at else None
@@ -121,6 +134,7 @@ def handle_pull_request_event(payload: dict) -> dict:
                 'author_github_id': author_github_id,
                 'author_participant': participant,
                 'head_sha': head_sha,
+                'base_branch': base_ref,
                 'merged': is_merged,
                 'merged_at': merged_at,
             },
@@ -128,6 +142,21 @@ def handle_pull_request_event(payload: dict) -> dict:
 
     # 4. Handle specific PR actions
     if action in ('opened', 'reopened'):
+        config = EventConfig.get_solo()
+        designated_branch = config.target_branch or 'main'
+        if base_ref != designated_branch:
+            logger.info(
+                "Ignoring PR #%d in %s: targets branch '%s' instead of designated event branch '%s'",
+                pr_number,
+                project.full_name,
+                base_ref,
+                designated_branch,
+            )
+            return {
+                'status': 'ignored',
+                'pr_id': pr_obj.id,
+                'reason': f"PR targets '{base_ref}', but designated event branch is '{designated_branch}'",
+            }
         title = pr_data.get('title') or ''
         body = pr_data.get('body') or ''
         head_ref = (pr_data.get('head') or {}).get('ref') or ''
@@ -213,10 +242,11 @@ def handle_pull_request_event(payload: dict) -> dict:
 
     elif action == 'closed':
         with transaction.atomic():
+            pr_obj.base_branch = base_ref
             if is_merged:
                 pr_obj.merged = True
                 pr_obj.merged_at = merged_at or timezone.now()
-                pr_obj.save(update_fields=['merged', 'merged_at'])
+                pr_obj.save(update_fields=['merged', 'merged_at', 'base_branch'])
 
                 contributions = list(Contribution.objects.filter(pull_request=pr_obj))
                 if not contributions and participant:

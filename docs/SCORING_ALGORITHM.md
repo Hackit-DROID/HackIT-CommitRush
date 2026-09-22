@@ -110,14 +110,16 @@ $$P_{\text{calc}} = \text{round}(P_{\text{base}} \times M)$$
 
 ### Per-PR Capped Points ($P_{\text{pr\_capped}}$)
 $$P_{\text{pr\_capped}} = \min(P_{\text{calc}}, \text{EventConfig.per\_pr\_max\_points})$$
-*(Default `per_pr_max_points` = 100)*
+*(Default `per_pr_max_points` = 50, matching the Master tier cap)*
 
 ### Daily Allowance & Final Awarded Points ($P_{\text{final}}$)
+> **Official Event Rule:** Each participant can earn a maximum of **120 points per calendar day** in the official event timezone `Asia/Kolkata` (IST, UTC+05:30), with resets strictly at 00:00 IST. See [EVENT_SCORING_GUIDE.md](EVENT_SCORING_GUIDE.md) for full competition guidelines.
+
 Let:
-- $C_{\text{today}}$ = participant contributions merged today
+- $C_{\text{today}}$ = participant contributions merged today (in `Asia/Kolkata`)
 - $C_{\text{max}}$ = `EventConfig.max_contributions_per_day`
-- $P_{\text{today}}$ = points awarded to participant today
-- $L_{\text{daily}}$ = `EventConfig.max_points_per_day`
+- $P_{\text{today}}$ = points awarded to participant today (in `Asia/Kolkata`)
+- $L_{\text{daily}}$ = `EventConfig.max_points_per_day` (= 120)
 - $A_{\text{rem}} = \max(0, L_{\text{daily}} - P_{\text{today}})$ (Remaining daily allowance)
 
 1. **Daily Contribution Limit Reached** ($C_{\text{today}} \ge C_{\text{max}}$):
@@ -129,7 +131,7 @@ Let:
 3. **Points Exceed Remaining Allowance** ($P_{\text{pr\_capped}} > A_{\text{rem}}$):
    - When `EventConfig.allow_partial_daily_points == True`:
      $$P_{\text{final}} = A_{\text{rem}} \quad (\text{status} = \text{AWARDED}, \text{cap} = \text{'Daily limit'})$$
-   - When `EventConfig.allow_partial_daily_points == False`:
+   - When `EventConfig.allow_partial_daily_points == False` (CommitRush Default):
      $$P_{\text{final}} = 0 \quad (\text{status} = \text{DEFERRED}, \text{cap} = \text{'Daily limit'})$$
 
 4. **Under All Caps** ($P_{\text{pr\_capped}} \le A_{\text{rem}}$):
@@ -259,7 +261,8 @@ The contributor dashboard and contribution detail views display this exact trans
 
 - **Authoritative Metric**: `Participant.total_points`, which is the direct atomic accumulation of `final_awarded_points`.
 - **Enriched Contributor Context**:
-  - `points_today`: Points earned in the current UTC calendar day.
-  - `daily_limit`: `EventConfig.max_points_per_day`.
-  - `remaining_daily_allowance`: Points remaining before daily cap.
+  - `points_today`: Points earned in the current event calendar day (evaluated in `Asia/Kolkata` IST, resetting at `00:00 IST`).
+  - `daily_limit`: `EventConfig.max_points_per_day` (default: 120 points).
+  - `remaining_daily_allowance`: Points remaining before daily cap (`max(0, 120 - points_today)`).
   - `is_daily_limit_reached`: Boolean flag rendered as a **"Capped"** badge when daily limit is reached.
+  - `export_leaderboard`: Management command and API endpoint (`/api/v1/leaderboard/export/`) persisting to `leaderboard.json`.

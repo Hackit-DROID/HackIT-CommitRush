@@ -19,7 +19,12 @@ from core.github_sync import (
     GitHubSyncError,
     sync_repository_and_issues,
 )
-from core.leaderboard import calculate_participant_rank, fetch_leaderboard_data, invalidate_leaderboard_cache
+from core.leaderboard import (
+    calculate_participant_rank,
+    fetch_leaderboard_data,
+    generate_leaderboard_json,
+    invalidate_leaderboard_cache,
+)
 from core.models import (
     AuditLog,
     Contribution,
@@ -792,6 +797,19 @@ class LeaderboardView(APIView):
         }
 
         return Response(response_payload, status=status.HTTP_200_OK)
+
+
+class LeaderboardExportView(APIView):
+    """
+    GET /api/v1/leaderboard/export/
+    Serves persistent JSON data structure for the competition leaderboard.
+    """
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        data = generate_leaderboard_json()
+        return Response(data, status=status.HTTP_200_OK)
 
 
 class DashboardView(APIView):

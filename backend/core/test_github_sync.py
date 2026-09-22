@@ -664,6 +664,82 @@ class SyncIssueTestCase(TestCase):
         self.assertEqual(issue.points, 50)
         self.assertEqual(issue.labels.count(), 3)
 
+    def test_sync_issue_updates_points_when_github_metadata_changes(self):
+        """Verify that updating an existing issue with new points/difficulty on GitHub updates DB points."""
+        issue, created = sync_issue(self.project, SAMPLE_ISSUE_PAYLOAD_1)
+        self.assertTrue(created)
+        self.assertEqual(issue.points, 50)
+
+        # Update payload with explicit difficulty and points from GitHub
+        updated_payload = {
+            'id': 100001,
+            'number': 42,
+            'title': '[CR-42] Refactored Title',
+            'state': 'open',
+            'labels': [{'name': 'difficulty:medium'}, {'name': 'type:security'}],
+            'body': '**Difficulty:** Medium\r\n\r\n**Suggested Points:** 20',
+        }
+        updated_issue, created_again = sync_issue(self.project, updated_payload)
+        self.assertFalse(created_again)
+
+        issue.refresh_from_db()
+        self.assertEqual(issue.points, 20)
+        self.assertEqual(issue.difficulty, 'medium')
+        self.assertEqual(issue.category, 'security')
+
+    def test_sync_issue_extracts_various_points_and_difficulty_formats(self):
+        """Verify points extraction from various label and markdown body variations."""
+        from core.github_sync import extract_issue_metadata
+
+        # Format A: **Points:** 20
+        res_a = extract_issue_metadata({'body': '**Points:** 20', 'labels': []})
+        self.assertEqual(res_a['points'], 20)
+        self.assertEqual(res_a['difficulty'], 'medium')
+
+        # Format B: Points in label (points: 30)
+        res_b = extract_issue_metadata({'body': '', 'labels': [{'name': 'points: 30'}]})
+        self.assertEqual(res_b['points'], 30)
+        self.assertEqual(res_b['difficulty'], 'hard')
+
+        # Format C: Standalone difficulty label (easy -> 10)
+        res_c = extract_issue_metadata({'body': '', 'labels': [{'name': 'easy'}]})
+        self.assertEqual(res_c['points'], 10)
+        self.assertEqual(res_c['difficulty'], 'easy')
+
+        # Format D: Difficulty Beginner -> 5
+        res_d = extract_issue_metadata({'body': '**Difficulty:** Beginner', 'labels': []})
+        self.assertEqual(res_d['points'], 5)
+        self.assertEqual(res_d['difficulty'], 'beginner')
+
+    def test_sync_issue_matches_and_deduplicates_by_project_and_number(self):
+        """Verify that an issue with a placeholder github_issue_id gets updated rather than duplicated."""
+        # Create issue with placeholder github_issue_id (e.g. from seed data)
+        seed_issue = Issue.objects.create(
+            project=self.project,
+            github_issue_id=701,
+            number=101,
+            title='Old Demo Title',
+            points=50,
+            difficulty='beginner',
+        )
+
+        # Real GitHub payload has new github_issue_id 5327318709
+        github_payload = {
+            'id': 5327318709,
+            'number': 101,
+            'title': '[CR-101] Real Title From GitHub',
+            'state': 'open',
+            'labels': [{'name': 'difficulty:medium'}],
+            'body': '**Suggested Points:** 20',
+        }
+        synced_issue, created = sync_issue(self.project, github_payload)
+        self.assertFalse(created)
+        self.assertEqual(synced_issue.id, seed_issue.id)
+        self.assertEqual(synced_issue.github_issue_id, 5327318709)
+        self.assertEqual(synced_issue.points, 20)
+        self.assertEqual(synced_issue.difficulty, 'medium')
+        self.assertEqual(Issue.objects.filter(project=self.project, number=101).count(), 1)
+
     # ================= M2-T3 Label Synchronization Tests =================
 
     def test_sync_issue_associates_labels_and_creates_m2m(self):

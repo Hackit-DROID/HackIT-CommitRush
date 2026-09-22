@@ -8,6 +8,7 @@ from django.db.models.functions import RowNumber
 from django.utils import timezone
 
 from core.models import DailyContributionUsage, EventConfig, Participant
+from core.scoring.constants import DAILY_POINTS_CAP, get_event_now, get_event_today
 
 
 logger = logging.getLogger(__name__)
@@ -166,7 +167,7 @@ def fetch_leaderboard_data(page: int = 1, page_size: int = 20, current_participa
             results = []
         else:
             qs = list(get_leaderboard_queryset()[offset : offset + page_size])
-            today = timezone.now().date()
+            today = get_event_today()
             participant_ids = [row.id for row in qs]
             daily_usages = {
                 u.participant_id: u
@@ -209,7 +210,7 @@ def fetch_leaderboard_data(page: int = 1, page_size: int = 20, current_participa
     if current_participant is not None:
         rank = calculate_participant_rank(current_participant.id)
         if rank is not None:
-            today = timezone.now().date()
+            today = get_event_today()
             me_usage = DailyContributionUsage.objects.filter(participant=current_participant, date=today).first()
             me_pts_today = me_usage.points_count if me_usage else 0
             me_contribs_today = me_usage.contributions_count if me_usage else 0
@@ -231,7 +232,6 @@ def fetch_leaderboard_data(page: int = 1, page_size: int = 20, current_participa
                 'is_daily_limit_reached': me_limit_hit,
             }
 
-
     return {
         'count': count,
         'page': page,
@@ -240,4 +240,81 @@ def fetch_leaderboard_data(page: int = 1, page_size: int = 20, current_participa
         'is_frozen': is_frozen,
         'results': results,
         'me': me_data,
+    }
+
+
+def generate_leaderboard_json(as_of_date=None) -> dict:
+    """
+    Generates an authoritative, repository-friendly persistent leaderboard data structure.
+    Adheres strictly to the requested event schema:
+    {
+      "event": "HackIT CommitRush Open Source Contribution Drive",
+      "timezone": "Asia/Kolkata",
+      "daily_limit": 120,
+      "participants": {
+        "userA": {
+          "rank": 1,
+          "total_points": 450,
+          "counted_prs": 15,
+          "today_points": 110,
+          "remaining_today": 10,
+          "daily": {
+            "2026-09-23": {
+              "points": 110,
+              "merged_prs": 4
+            }
+          }
+        }
+      }
+    }
+    """
+    config = EventConfig.get_solo()
+    target_date = as_of_date or get_event_today()
+    daily_cap = config.max_points_per_day or DAILY_POINTS_CAP
+
+    qs = list(get_leaderboard_queryset())
+    participant_ids = [p.id for p in qs]
+
+    # Pre-fetch all daily usages grouped by participant
+    all_usages = DailyContributionUsage.objects.filter(participant_id__in=participant_ids).order_by('date')
+    usages_by_participant: dict[int, list[DailyContributionUsage]] = {}
+    for u in all_usages:
+        usages_by_participant.setdefault(u.participant_id, []).append(u)
+
+    participants_map = {}
+    for p in qs:
+        p_usages = usages_by_participant.get(p.id, [])
+        daily_map = {}
+        pts_today = 0
+        for u in p_usages:
+            d_str = u.date.isoformat()
+            daily_map[d_str] = {
+                'points': u.points_count,
+                'merged_prs': u.contributions_count,
+            }
+            if u.date == target_date:
+                pts_today = u.points_count
+
+        remaining_today = max(0, daily_cap - pts_today)
+
+        participants_map[p.github_username] = {
+            'rank': p.rank,
+            'github_username': p.github_username,
+            'total_points': p.total_points,
+            'counted_prs': p.merged_count,
+            'today_points': pts_today,
+            'remaining_today': remaining_today,
+            'daily_limit': daily_cap,
+            'is_daily_limit_reached': pts_today >= daily_cap,
+            'daily': daily_map,
+        }
+
+    return {
+        'event': 'HackIT CommitRush Open Source Contribution Drive',
+        'repository': 'Hackit-DROID/Open-Source-Contribution-Drive',
+        'timezone': 'Asia/Kolkata',
+        'generated_at': get_event_now().isoformat(),
+        'date': target_date.isoformat(),
+        'daily_limit': daily_cap,
+        'participants': participants_map,
     }
