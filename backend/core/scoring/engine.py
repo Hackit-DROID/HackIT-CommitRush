@@ -12,6 +12,12 @@ from core.models import (
     ScoringBreakdown,
 )
 from core.scoring.classifier import classify_contribution
+from core.scoring.constants import (
+    DAILY_POINTS_CAP,
+    DIFFICULTY_POINTS,
+    get_difficulty_points,
+    get_event_today,
+)
 from core.scoring.farming import detect_farming_signals
 
 logger = logging.getLogger(__name__)
@@ -35,7 +41,7 @@ class ScoringEngine:
      ↓
     Farming Detection Heuristics
      ↓
-    Daily Limits (Contributions Count & Points Cap)
+    Daily Limits (Contributions Count & Points Cap - 120 points IST)
      ↓
     Final Awarded Points Resolution
      ↓
@@ -62,7 +68,12 @@ class ScoringEngine:
 
         # Step 3: Base point calculation
         issue = getattr(contribution, 'issue', None)
-        base_points = getattr(issue, 'points', 10) if issue and issue.points is not None and issue.points > 0 else 10
+        if issue and getattr(issue, 'difficulty', None):
+            base_points = get_difficulty_points(issue.difficulty, getattr(issue, 'points', 10) or 10)
+        elif issue and getattr(issue, 'points', None) is not None and issue.points > 0:
+            base_points = issue.points
+        else:
+            base_points = 10
 
         # Step 4: Multiplier application
         multiplier = config.get_category_multiplier(category_key)
@@ -87,8 +98,8 @@ class ScoringEngine:
             category=category_key,
         )
 
-        # Step 8: Daily limits & farming caps
-        daily_points_max = config.max_points_per_day
+        # Step 8: Daily limits & farming caps (Official Event Rule: 120 points/day in IST)
+        daily_points_max = config.max_points_per_day or DAILY_POINTS_CAP
         daily_contribs_max = config.max_contributions_per_day
         daily_points_before = daily_usage.points_count
         daily_allowance_remaining = max(0, daily_points_max - daily_points_before)
@@ -111,7 +122,7 @@ class ScoringEngine:
             final_awarded_points = 0
             cap_applied = 'Daily limit'
             status = 'DEFERRED'
-            reason = f"Daily limit exceeded: daily points cap ({daily_points_before}/{daily_points_max})"
+            reason = f"DAILY LIMIT REACHED: Participant already reached the {daily_points_max}-point daily limit for today ({daily_points_before}/{daily_points_max})"
         elif points_after_pr_cap > daily_allowance_remaining:
             # Points exceed remaining daily allowance
             if config.allow_partial_daily_points:
@@ -126,7 +137,7 @@ class ScoringEngine:
                 final_awarded_points = 0
                 cap_applied = 'Daily limit'
                 status = 'DEFERRED'
-                reason = f"Daily limit exceeded: daily points cap ({daily_points_before + points_after_pr_cap}/{daily_points_max})"
+                reason = f"NOT COUNTED - DAILY LIMIT: Adding {points_after_pr_cap} points would exceed today's {daily_points_max}-point daily limit ({daily_points_before}/{daily_points_max})"
         else:
             # Under all caps
             final_awarded_points = points_after_pr_cap
@@ -200,7 +211,85 @@ class ScoringEngine:
 
             participant = Participant.objects.select_for_update().get(id=contribution.participant_id)
             config = EventConfig.get_solo()
-            today = timezone.now().date()
+            today = get_event_today()
+
+            # Merged status check: only merged PRs can award points
+            if contribution.pull_request and not contribution.pull_request.merged:
+                logger.warning(
+                    "PullRequest %s is not merged; cannot award points for Contribution %s",
+                    contribution.pull_request_id,
+                    contrib_id,
+                )
+                return {
+                    'status': 'DEFERRED',
+                    'points': 0,
+                    'reason': 'PR is not merged. Only merged pull requests award competition points.',
+                }
+
+            # Branch check: PR must target designated event branch (normally main)
+            designated_branch = config.target_branch or 'main'
+            pr_branch = getattr(contribution.pull_request, 'base_branch', 'main') or 'main'
+            if pr_branch != designated_branch:
+                logger.warning(
+                    "PullRequest %s targets '%s' instead of designated branch '%s'",
+                    contribution.pull_request_id,
+                    pr_branch,
+                    designated_branch,
+                )
+                return {
+                    'status': 'DEFERRED',
+                    'points': 0,
+                    'reason': f"PR does not target designated event branch '{designated_branch}'.",
+                }
+
+            # Anti-exploit: Single CommitRush issue must not award points more than once across the event
+            if contribution.issue:
+                prior_issue_award = PointTransaction.objects.filter(
+                    contribution__issue=contribution.issue,
+                    status='AWARDED',
+                ).exclude(contribution=contribution).first()
+                if prior_issue_award:
+                    logger.info(
+                        "Issue %s was already awarded points in txn %s; deferring points for Contribution %s",
+                        contribution.issue_id,
+                        prior_issue_award.id,
+                        contrib_id,
+                    )
+                    pt = PointTransaction.objects.create(
+                        contribution=contribution,
+                        participant=participant,
+                        points=0,
+                        status='DEFERRED',
+                        reason=f"Duplicate issue scoring prevented: Issue #{getattr(contribution.issue, 'number', '')} has already awarded points.",
+                    )
+                    category_key, category_label = classify_contribution(contribution)
+                    base_points = getattr(contribution.issue, 'points', 10) or 10
+                    breakdown, _ = ScoringBreakdown.objects.update_or_create(
+                        contribution=contribution,
+                        defaults={
+                            'point_transaction': pt,
+                            'base_points': base_points,
+                            'category': category_key,
+                            'category_label': category_label,
+                            'multiplier': 1.0,
+                            'calculated_points': base_points,
+                            'per_pr_cap': config.per_pr_max_points,
+                            'points_after_pr_cap': base_points,
+                            'daily_points_cap': config.max_points_per_day,
+                            'daily_points_before': 0,
+                            'daily_allowance_remaining': 0,
+                            'cap_applied': 'Duplicate issue',
+                            'final_awarded_points': 0,
+                            'farming_signals': {'duplicate_issue': True},
+                        },
+                    )
+                    return {
+                        'status': 'DEFERRED',
+                        'points': 0,
+                        'reason': f"Duplicate issue scoring prevented: Issue #{getattr(contribution.issue, 'number', '')} has already awarded points.",
+                        'transaction_id': pt.id,
+                        'breakdown_id': breakdown.id,
+                    }
 
             # Suspended participant gating
             if participant.is_suspended:
@@ -249,7 +338,7 @@ class ScoringEngine:
                     'transaction_id': pt.id,
                 }
 
-            # Row lock on DailyContributionUsage for (participant, date)
+            # Row lock on DailyContributionUsage for (participant, date in IST)
             daily_usage, _ = DailyContributionUsage.objects.select_for_update().get_or_create(
                 participant=participant,
                 date=today,
@@ -333,7 +422,12 @@ class ScoringEngine:
                     pt.id,
                 )
             else:
-                # Deferred: update merged count since contribution is still MERGED
+                # Deferred: update sub_status if daily limit reached
+                if plan.get('cap_applied') == 'Daily limit':
+                    contribution.sub_status = 'DAILY_LIMIT_REACHED'
+                    contribution.flagged_reason = plan.get('reason', 'DAILY LIMIT REACHED')
+                    contribution.save(update_fields=['sub_status', 'flagged_reason'])
+                # update merged count since contribution is still MERGED
                 participant.merged_count = participant.contributions.filter(status='MERGED').count()
                 participant.save(update_fields=['merged_count'])
                 invalidate_leaderboard_cache()

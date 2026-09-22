@@ -242,11 +242,18 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+# Event Official Timezone: Asia/Kolkata (IST), resetting at 00:00 IST every day
+TIME_ZONE = os.environ.get('TIME_ZONE', 'Asia/Kolkata')
+EVENT_TIMEZONE = os.environ.get('EVENT_TIMEZONE', 'Asia/Kolkata')
+EVENT_START_DATE = os.environ.get('EVENT_START_DATE', '2026-09-22')
+EVENT_END_DATE = os.environ.get('EVENT_END_DATE', '2026-10-31')
+EVENT_TARGET_BRANCH = os.environ.get('EVENT_TARGET_BRANCH', 'main')
+EVENT_DAILY_POINTS_CAP = int(os.environ.get('EVENT_DAILY_POINTS_CAP', '120'))
 
 USE_I18N = True
 
 USE_TZ = True
+
 
 
 # Static files (CSS, JavaScript, Images)

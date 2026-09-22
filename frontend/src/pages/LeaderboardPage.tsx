@@ -157,13 +157,13 @@ export function LeaderboardPage() {
             <div className="text-center sm:text-right">
               <span className="text-[10px] uppercase tracking-wider text-[#777777] block">Today / Limit</span>
               <span className="text-sm font-bold text-[#111111] tabular-nums">
-                {me.points_today ?? 0} / {me.daily_limit ?? 500}
+                {me.points_today ?? 0} / {me.daily_limit ?? 120}
               </span>
             </div>
             <div className="text-center sm:text-right">
               <span className="text-[10px] uppercase tracking-wider text-[#777777] block">Remaining</span>
               <span className="text-sm font-bold text-emerald-700 tabular-nums">
-                {me.remaining_daily_allowance ?? 500} pts
+                {me.remaining_daily_allowance ?? 120} pts
               </span>
             </div>
             <div className="text-center sm:text-right">
@@ -270,11 +270,11 @@ export function LeaderboardPage() {
                         <div className="flex flex-col items-center gap-1">
                           <div className="flex items-center gap-1.5 text-[#111111]">
                             <span className="font-semibold tabular-nums">{entry.points_today ?? 0}</span>
-                            <span className="text-[#777777]">/ {entry.daily_limit ?? 500} today</span>
+                            <span className="text-[#777777]">/ {entry.daily_limit ?? 120} today</span>
                           </div>
                           <div className="flex items-center gap-1.5">
                             <span className={`text-[11px] tabular-nums ${entry.remaining_daily_allowance === 0 ? 'text-amber-800 font-semibold' : 'text-[#777777]'}`}>
-                              {entry.remaining_daily_allowance ?? 500} remaining
+                              {entry.remaining_daily_allowance ?? 120} remaining
                             </span>
                             {isCapped && (
                               <span

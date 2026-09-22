@@ -826,12 +826,17 @@ def extract_issue_metadata(issue_data: dict) -> dict:
     Extract CommitRush metadata (difficulty, category, points) from GitHub issue labels and body.
     Supports Open-Source-Contribution-Drive standards:
     - Labels: 'difficulty:easy', 'difficulty:beginner', 'difficulty:intermediate', 'difficulty:advanced', 'difficulty:master', 'difficulty:expert'
+    - Labels: 'beginner', 'easy', 'medium', 'intermediate', 'hard', 'advanced', 'master', 'expert'
+    - Labels: 'points: 20', 'points:20', '20 points', '20pts', etc.
     - Labels: 'type:security', 'type:bug', 'type:backend', 'type:frontend', 'type:database', etc.
-    - Markdown body: '**Suggested Points:** <int>', '**Difficulty:** <tier>', '**Type:** <type>', '**Area:** <area>'
+    - Markdown body: '**Suggested Points:** <int>', '**Points:** <int>', '**Difficulty:** <tier>', '**Type:** <type>', '**Area:** <area>'
     """
     difficulty = ''
     category = ''
     points = None
+    has_explicit_points = False
+    has_explicit_difficulty = False
+    has_explicit_category = False
 
     # 1. Parse labels
     raw_labels = issue_data.get('labels') or []
@@ -845,56 +850,93 @@ def extract_issue_metadata(issue_data: dict) -> dict:
         label_lower = label_name.strip().lower()
         if label_lower.startswith('difficulty:'):
             difficulty = label_lower.split(':', 1)[1].strip()
+            has_explicit_difficulty = True
+        elif not difficulty and label_lower in (
+            'beginner', 'easy', 'medium', 'intermediate', 'hard', 'advanced', 'master', 'expert'
+        ):
+            difficulty = label_lower
+            has_explicit_difficulty = True
         elif label_lower.startswith('type:'):
             category = label_lower.split(':', 1)[1].strip()
+            has_explicit_category = True
         elif label_lower.startswith('category:'):
             category = label_lower.split(':', 1)[1].strip()
+            has_explicit_category = True
+        elif label_lower.startswith('points:'):
+            try:
+                points = int(label_lower.split(':', 1)[1].strip())
+                has_explicit_points = True
+            except ValueError:
+                pass
+        elif points is None:
+            pts_lbl_match = re.match(r'^(\d+)\s*(?:points?|pts)$', label_lower)
+            if pts_lbl_match:
+                try:
+                    points = int(pts_lbl_match.group(1))
+                    has_explicit_points = True
+                except ValueError:
+                    pass
 
     # 2. Parse markdown body if present
     body = issue_data.get('body') or ''
     if body and isinstance(body, str):
         if points is None:
-            pts_match = re.search(r'\*\*Suggested Points:\*\*\s*(\d+)', body, re.IGNORECASE)
+            pts_match = re.search(r'(?:\*\*|\b)(?:suggested\s+)?points[:\s]*(?:\*\*|\b)?[:\s]*(\d+)', body, re.IGNORECASE)
             if pts_match:
                 try:
                     points = int(pts_match.group(1))
+                    has_explicit_points = True
                 except ValueError:
                     pass
 
         if not difficulty:
-            diff_match = re.search(r'\*\*Difficulty:\*\*\s*([^\n\r*]+)', body, re.IGNORECASE)
+            diff_match = re.search(r'(?:\*\*|\b)difficulty[:\s]*(?:\*\*|\b)?[:\s]*([^\n\r*]+)', body, re.IGNORECASE)
             if diff_match:
                 difficulty = diff_match.group(1).strip().lower()
+                has_explicit_difficulty = True
 
         if not category:
-            type_match = re.search(r'\*\*Type:\*\*\s*([^\n\r*]+)', body, re.IGNORECASE)
+            type_match = re.search(r'(?:\*\*|\b)type[:\s]*(?:\*\*|\b)?[:\s]*([^\n\r*]+)', body, re.IGNORECASE)
             if type_match:
                 category = type_match.group(1).strip().lower()
+                has_explicit_category = True
             else:
-                area_match = re.search(r'\*\*Area:\*\*\s*([^\n\r*]+)', body, re.IGNORECASE)
+                area_match = re.search(r'(?:\*\*|\b)area[:\s]*(?:\*\*|\b)?[:\s]*([^\n\r*]+)', body, re.IGNORECASE)
                 if area_match:
                     category = area_match.group(1).strip().lower()
+                    has_explicit_category = True
+
+    diff_points_map = {
+        'beginner': 5,
+        'easy': 10,
+        'medium': 20,
+        'intermediate': 20,
+        'hard': 30,
+        'advanced': 30,
+        'master': 50,
+        'expert': 50,
+    }
 
     if points is None:
         if difficulty:
-            diff_points_map = {
-                'easy': 10,
-                'beginner': 25,
-                'medium': 50,
-                'intermediate': 50,
-                'advanced': 100,
-                'hard': 100,
-                'master': 150,
-                'expert': 150,
-            }
-            points = diff_points_map.get(difficulty, 50)
+            points = diff_points_map.get(difficulty.lower(), 50)
         else:
             points = 50
+    else:
+        # Cap points at 50 per event rules (Master difficulty cap)
+        points = min(points, 50)
+        if not difficulty:
+            rev_map = {5: 'beginner', 10: 'easy', 20: 'medium', 30: 'hard', 50: 'master'}
+            difficulty = rev_map.get(points, '')
 
     return {
         'difficulty': difficulty,
         'category': category,
         'points': points,
+        'has_explicit_points': has_explicit_points,
+        'has_explicit_difficulty': has_explicit_difficulty,
+        'has_explicit_category': has_explicit_category,
+        'has_explicit_metadata': (has_explicit_points or has_explicit_difficulty or has_explicit_category),
     }
 
 
@@ -910,9 +952,10 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
     - title: issue_data.get('title') or ''
     - status: 'closed' if issue_data.get('state') == 'closed' else 'open'
     
-    Non-destructive update rule:
+    Update rules:
     - If Issue exists: updates mutable GitHub metadata ('title', 'status', 'number', 'project').
-      DOES NOT overwrite operator-customized fields: 'points', 'difficulty', 'category', 'is_featured'.
+      Synchronizes points, difficulty, and category when explicitly provided by GitHub metadata (body / labels).
+      Preserves operator customizations when GitHub metadata is not specified.
     - If Issue is created: populates 'points', 'difficulty', 'category' from GitHub labels/body metadata.
     
     Label synchronization (M2-T3):
@@ -947,9 +990,16 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
 
     with transaction.atomic():
         issue = Issue.objects.select_for_update().filter(github_issue_id=github_issue_id).first()
+        if not issue:
+            existing_by_num = Issue.objects.select_for_update().filter(project=project, number=number).first()
+            if existing_by_num:
+                issue = existing_by_num
 
         if issue:
             updated_fields = []
+            if issue.github_issue_id != github_issue_id:
+                issue.github_issue_id = github_issue_id
+                updated_fields.append('github_issue_id')
             if issue.project_id != project.id:
                 issue.project = project
                 updated_fields.append('project')
@@ -968,13 +1018,29 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
             if created_by_github_id is not None and issue.created_by_github_id != created_by_github_id:
                 issue.created_by_github_id = created_by_github_id
                 updated_fields.append('created_by_github_id')
-            # Populate empty fields non-destructively
-            if not issue.difficulty and meta['difficulty']:
-                issue.difficulty = meta['difficulty']
-                updated_fields.append('difficulty')
-            if not issue.category and meta['category']:
-                issue.category = meta['category']
-                updated_fields.append('category')
+
+            # Synchronize points and difficulty from GitHub when explicitly present
+            if meta.get('has_explicit_points') or meta.get('has_explicit_difficulty'):
+                if meta['points'] is not None and issue.points != meta['points']:
+                    issue.points = meta['points']
+                    updated_fields.append('points')
+                if meta['difficulty'] and issue.difficulty != meta['difficulty']:
+                    issue.difficulty = meta['difficulty']
+                    updated_fields.append('difficulty')
+            else:
+                # Non-destructive fallback for empty fields
+                if not issue.difficulty and meta['difficulty']:
+                    issue.difficulty = meta['difficulty']
+                    updated_fields.append('difficulty')
+
+            if meta.get('has_explicit_category'):
+                if meta['category'] and issue.category != meta['category']:
+                    issue.category = meta['category']
+                    updated_fields.append('category')
+            else:
+                if not issue.category and meta['category']:
+                    issue.category = meta['category']
+                    updated_fields.append('category')
 
             if updated_fields:
                 issue.save(update_fields=updated_fields)
