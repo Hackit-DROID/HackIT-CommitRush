@@ -124,10 +124,11 @@ REST_FRAMEWORK = {
 
 # Caching Configuration (PRD §10.2, §20, plan.md M7-T1)
 CACHE_BACKEND = os.environ.get('CACHE_BACKEND', 'django.core.cache.backends.locmem.LocMemCache')
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
 CACHES = {
     'default': {
         'BACKEND': CACHE_BACKEND,
-        'LOCATION': os.environ.get('REDIS_URL', 'commitrush-cache'),
+        'LOCATION': REDIS_URL if 'redis' in CACHE_BACKEND.lower() else os.environ.get('CACHE_LOCATION', 'commitrush-cache'),
         'TIMEOUT': 60,
     }
 }
@@ -398,7 +399,7 @@ if GITHUB_REDIRECT_URI:
 
 # Celery & Redis Configuration (PRD §10.1, §13.6, plan.md M2-T4, M4-T3)
 # Redis is the broker, cache, and distributed semaphore backend. Configuration is backed by environment variables.
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', REDIS_URL)
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
 CELERY_ACCEPT_CONTENT = ['json']
@@ -427,6 +428,10 @@ CELERY_TASK_QUEUES = {
     'default': {
         'exchange': 'default',
         'routing_key': 'default',
+    },
+    'analytics': {
+        'exchange': 'analytics',
+        'routing_key': 'analytics',
     },
 }
 CELERY_TASK_ROUTES = {
