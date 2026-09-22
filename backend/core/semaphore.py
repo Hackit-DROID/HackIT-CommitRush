@@ -21,7 +21,7 @@ redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
 
 -- 2. Check if client_id already holds a slot
 local rank = redis.call('ZRANK', key, client_id)
-if rank ~= nil then
+if rank then
     redis.call('ZADD', key, now, client_id)
     redis.call('EXPIRE', key, ttl * 2)
     return 1
@@ -53,7 +53,7 @@ local now = tonumber(ARGV[2])
 local ttl = tonumber(ARGV[3])
 
 local rank = redis.call('ZRANK', key, client_id)
-if rank ~= nil then
+if rank then
     redis.call('ZADD', key, now, client_id)
     redis.call('EXPIRE', key, ttl * 2)
     return 1
@@ -99,7 +99,7 @@ class RedisMergeSemaphore:
     def get_redis_client(self) -> redis.Redis:
         if self._redis is not None:
             return self._redis
-        redis_url = getattr(settings, 'REDIS_URL', getattr(settings, 'CELERY_BROKER_URL', 'redis://localhost:6379/0'))
+        redis_url = getattr(settings, 'REDIS_URL', getattr(settings, 'CELERY_BROKER_URL', 'redis://127.0.0.1:6379/0'))
         self._redis = redis.Redis.from_url(redis_url, decode_responses=True)
         return self._redis
 
@@ -235,7 +235,7 @@ class RedisContributionLock:
     def get_redis_client(self) -> redis.Redis:
         if self._redis is not None:
             return self._redis
-        redis_url = getattr(settings, 'REDIS_URL', getattr(settings, 'CELERY_BROKER_URL', 'redis://localhost:6379/0'))
+        redis_url = getattr(settings, 'REDIS_URL', getattr(settings, 'CELERY_BROKER_URL', 'redis://127.0.0.1:6379/0'))
         self._redis = redis.Redis.from_url(redis_url, decode_responses=True)
         return self._redis
 
