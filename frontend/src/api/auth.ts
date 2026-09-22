@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiRequest } from './client';
+import { apiRequest, API_BASE_URL } from './client';
 import { CurrentUser, ApiError } from '../types/api';
 
 export const authKeys = {
@@ -36,13 +36,25 @@ export async function logoutUser(): Promise<{ detail: string }> {
 }
 
 export function getGitHubLoginUrl(nextPath: string = '/profile'): string {
+  const query = `?next=${encodeURIComponent(nextPath)}`;
+
+  // If an absolute API base URL is configured (e.g. https://api.commitrush.org/api/v1),
+  // route OAuth login directly to that backend host.
+  if (API_BASE_URL.startsWith('http://') || API_BASE_URL.startsWith('https://')) {
+    return `${API_BASE_URL}/auth/github/login/${query}`;
+  }
+
+  // Local development default when running locally against local backend
   if (
     typeof window !== 'undefined' &&
     (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost')
   ) {
-    return `http://localhost:8000/auth/github/login/?next=${encodeURIComponent(nextPath)}`;
+    return `http://localhost:8000/auth/github/login/${query}`;
   }
-  return `/api/v1/auth/github/login/?next=${encodeURIComponent(nextPath)}`;
+
+  // Same-origin production or reverse-proxied relative path (/api/v1)
+  const base = API_BASE_URL.startsWith('/') ? API_BASE_URL : `/${API_BASE_URL}`;
+  return `${base}/auth/github/login/${query}`;
 }
 
 export function useCurrentUser() {
