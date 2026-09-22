@@ -1,7 +1,8 @@
 import { ApiError } from '../types/api';
 
-const RAW_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '/api/v1';
-const API_BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
+export const RAW_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '/api/v1';
+export const API_BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
+
 
 function getCsrfToken(): string | null {
   if (typeof document === 'undefined') return null;

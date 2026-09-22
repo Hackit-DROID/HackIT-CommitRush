@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 import os
+import sys
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -56,11 +57,14 @@ if not DEBUG and (not SECRET_KEY or SECRET_KEY.startswith('django-insecure-') or
         "DJANGO_SECRET_KEY must be set to a secure, random string (min 50 chars) in production when DEBUG=False."
     )
 
-ALLOWED_HOSTS = [
-    h.strip()
-    for h in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1],testserver').split(',')
-    if h.strip()
-]
+allowed_hosts_raw = os.environ.get('DJANGO_ALLOWED_HOSTS')
+if allowed_hosts_raw:
+    ALLOWED_HOSTS = [h.strip() for h in allowed_hosts_raw.split(',') if h.strip()]
+    if 'testserver' not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append('testserver')
+else:
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]', 'testserver']
+
 
 
 # Application definition
@@ -81,6 +85,12 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+]
+# WhiteNoise serves static assets directly from WSGI in production; bypassed during test runs
+if not (len(sys.argv) > 1 and sys.argv[1] == 'test'):
+    MIDDLEWARE.append('whitenoise.middleware.WhiteNoiseMiddleware')
+
+MIDDLEWARE.extend([
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -88,7 +98,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-]
+])
 
 # REST Framework default configuration (PRD §16, §19, §20, Plan M3-T5, M7-T1)
 REST_FRAMEWORK = {
@@ -127,7 +137,7 @@ CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.environ.get(
         'CORS_ALLOWED_ORIGINS',
-        'http://localhost:5173,http://127.0.0.1:5173'
+        'http://localhost:5173,http://127.0.0.1:5173' if DEBUG else ''
     ).split(',')
     if origin.strip()
 ]
@@ -159,9 +169,16 @@ WSGI_APPLICATION = 'commitrush.wsgi.application'
 # PostgreSQL is the authoritative application database for CommitRush.
 # Connection parameters are configured via environment variables.
 
-USE_SQLITE = os.environ.get('USE_SQLITE', 'True').lower() in ('true', '1', 'yes') or os.environ.get('DB_ENGINE') == 'sqlite3'
-
 DATABASE_URL = os.environ.get('DATABASE_URL')
+USE_SQLITE_ENV = os.environ.get('USE_SQLITE')
+
+# When DATABASE_URL is present, PostgreSQL takes precedence over SQLite unless explicitly pointing to a sqlite scheme.
+if DATABASE_URL:
+    USE_SQLITE = False
+elif USE_SQLITE_ENV is not None:
+    USE_SQLITE = USE_SQLITE_ENV.lower() in ('true', '1', 'yes') or os.environ.get('DB_ENGINE') == 'sqlite3'
+else:
+    USE_SQLITE = not bool(os.environ.get('DB_HOST') or os.environ.get('DB_NAME'))
 
 if DATABASE_URL:
     import urllib.parse
@@ -177,16 +194,36 @@ if DATABASE_URL:
             }
         }
     else:
+        # Handles postgresql://, postgres://, and related PostgreSQL URL schemes
+        query_params = urllib.parse.parse_qs(parsed_db.query)
+        db_options = {}
+        for qk, qvals in query_params.items():
+            if qvals:
+                db_options[qk] = qvals[-1]
+
+        # Ensure SSL for Neon PostgreSQL connections
+        # Priority: explicit DB_SSLMODE env > URL query parameter (?sslmode=...) > automatic 'require' for .neon.tech
+        sslmode = os.environ.get('DB_SSLMODE') or db_options.get('sslmode')
+        if not sslmode and parsed_db.hostname and 'neon.tech' in parsed_db.hostname:
+            sslmode = 'require'
+        if sslmode:
+            db_options['sslmode'] = sslmode
+
+        db_name = urllib.parse.unquote(parsed_db.path.lstrip('/')) if parsed_db.path else ''
+        db_user = urllib.parse.unquote(parsed_db.username) if parsed_db.username else ''
+        db_password = urllib.parse.unquote(parsed_db.password) if parsed_db.password else ''
+
         DATABASES = {
             'default': {
                 'ENGINE': 'django.db.backends.postgresql',
-                'NAME': parsed_db.path.lstrip('/'),
-                'USER': parsed_db.username or '',
-                'PASSWORD': parsed_db.password or '',
+                'NAME': db_name,
+                'USER': db_user,
+                'PASSWORD': db_password,
                 'HOST': parsed_db.hostname or 'localhost',
                 'PORT': str(parsed_db.port or 5432),
                 'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', '600')),
                 'CONN_HEALTH_CHECKS': os.environ.get('DB_CONN_HEALTH_CHECKS', 'True').lower() in ('true', '1'),
+                'OPTIONS': db_options,
             }
         }
 elif USE_SQLITE and not os.environ.get('DB_HOST') and not os.environ.get('DB_NAME'):
@@ -200,16 +237,25 @@ elif USE_SQLITE and not os.environ.get('DB_HOST') and not os.environ.get('DB_NAM
         }
     }
 else:
+    db_options = {}
+    db_host = os.environ.get('DB_HOST', 'localhost')
+    db_sslmode = os.environ.get('DB_SSLMODE')
+    if not db_sslmode and 'neon.tech' in db_host:
+        db_sslmode = 'require'
+    if db_sslmode:
+        db_options['sslmode'] = db_sslmode
+
     DATABASES = {
         'default': {
             'ENGINE': os.environ.get('DB_ENGINE', 'django.db.backends.postgresql'),
             'NAME': os.environ.get('DB_NAME', 'commitrush'),
             'USER': os.environ.get('DB_USER', 'commitrush'),
             'PASSWORD': os.environ.get('DB_PASSWORD', ''),
-            'HOST': os.environ.get('DB_HOST', 'localhost'),
+            'HOST': db_host,
             'PORT': os.environ.get('DB_PORT', '5432'),
             'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', '600')),
             'CONN_HEALTH_CHECKS': os.environ.get('DB_CONN_HEALTH_CHECKS', 'True').lower() in ('true', '1'),
+            'OPTIONS': db_options,
         }
     }
 
@@ -254,6 +300,14 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
@@ -276,8 +330,8 @@ GITHUB_CLIENT_ID = os.environ.get('GITHUB_CLIENT_ID', '')
 GITHUB_CLIENT_SECRET = os.environ.get('GITHUB_CLIENT_SECRET', '')
 GITHUB_REDIRECT_URI = os.environ.get(
     'GITHUB_REDIRECT_URI',
-    'http://localhost:8000/auth/github/callback/'
-)
+    'http://localhost:8000/auth/github/callback/' if DEBUG else ''
+).strip()
 # Minimum scope per PRD §13.1 & plan.md M1-T3. AMB-4 (email scope) remains open.
 GITHUB_OAUTH_SCOPE = os.environ.get('GITHUB_OAUTH_SCOPE', 'read:user')
 
@@ -288,8 +342,11 @@ GITHUB_API_TOKEN = os.environ.get('GITHUB_API_TOKEN', '')
 GITHUB_WEBHOOK_SECRET = os.environ.get('GITHUB_WEBHOOK_SECRET', '')
 
 # Frontend URLs for OAuth redirects
-FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173').strip()
-FRONTEND_AUTH_REDIRECT_URL = os.environ.get('FRONTEND_AUTH_REDIRECT_URL', f'{FRONTEND_URL}/profile')
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173' if DEBUG else '').strip()
+FRONTEND_AUTH_REDIRECT_URL = os.environ.get(
+    'FRONTEND_AUTH_REDIRECT_URL',
+    f'{FRONTEND_URL}/profile' if FRONTEND_URL else '/profile'
+).strip()
 
 # Ensure FRONTEND_URL is included in CORS allowed origins
 if FRONTEND_URL and FRONTEND_URL not in CORS_ALLOWED_ORIGINS:
@@ -299,6 +356,7 @@ if FRONTEND_URL and FRONTEND_URL not in CORS_ALLOWED_ORIGINS:
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SAMESITE = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax')
 SESSION_COOKIE_SECURE = os.environ.get('SESSION_COOKIE_SECURE', 'True' if not DEBUG else 'False').lower() in ('true', '1')
+SESSION_COOKIE_DOMAIN = os.environ.get('SESSION_COOKIE_DOMAIN') or None
 CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SAMESITE = os.environ.get('CSRF_COOKIE_SAMESITE', 'Lax')
 CSRF_COOKIE_SECURE = os.environ.get('CSRF_COOKIE_SECURE', 'True' if not DEBUG else 'False').lower() in ('true', '1')
@@ -317,16 +375,24 @@ CSRF_TRUSTED_ORIGINS = [
     origin.strip()
     for origin in os.environ.get(
         'CSRF_TRUSTED_ORIGINS',
-        'http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000'
+        'http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000' if DEBUG else ''
     ).split(',')
     if origin.strip()
 ]
 if FRONTEND_URL and FRONTEND_URL not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append(FRONTEND_URL)
+if GITHUB_REDIRECT_URI:
+    import urllib.parse
+    parsed_redirect = urllib.parse.urlparse(GITHUB_REDIRECT_URI)
+    if parsed_redirect.scheme and parsed_redirect.netloc:
+        redirect_origin = f"{parsed_redirect.scheme}://{parsed_redirect.netloc}"
+        if redirect_origin not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(redirect_origin)
 
-# Celery Configuration (PRD §10.1, §13.6, plan.md M2-T4, M4-T3)
-# Redis is the broker and result backend. Configuration is backed by environment variables.
-CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', os.environ.get('REDIS_URL', 'redis://localhost:6379/0'))
+# Celery & Redis Configuration (PRD §10.1, §13.6, plan.md M2-T4, M4-T3)
+# Redis is the broker, cache, and distributed semaphore backend. Configuration is backed by environment variables.
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', REDIS_URL)
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'

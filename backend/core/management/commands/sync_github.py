@@ -23,7 +23,7 @@ class Command(BaseCommand):
             '--repo',
             action='append',
             dest='repos',
-            help=f"Repository to synchronize in 'owner/name' format (defaults to '{DEFAULT_MONOREPO}'). Can be specified multiple times.",
+            help="Repository to synchronize in 'owner/name' format (e.g., --repo owner/name). Can be specified multiple times.",
         )
         parser.add_argument(
             '--no-issues',
