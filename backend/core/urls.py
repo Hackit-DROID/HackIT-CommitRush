@@ -26,6 +26,7 @@ from core.api_views import (
     PublicProfileView,
 )
 from core.auth_views import (
+    csrf_view,
     dev_login_view,
     frontend_profile_redirect,
     github_callback_view,
@@ -42,6 +43,7 @@ urlpatterns = [
     path('health/', health_view, name='health'),
     path('404/', custom_404_view, name='custom-404'),
     path('profile/', frontend_profile_redirect, name='profile-redirect'),
+    path('auth/csrf/', csrf_view, name='auth-csrf'),
     path('auth/dev-login/', dev_login_view, name='dev-login'),
     path('auth/github/login/', github_login_view, name='github-login'),
     path('auth/github/callback/', github_callback_view, name='github-callback'),

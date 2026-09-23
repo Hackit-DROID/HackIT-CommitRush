@@ -4,7 +4,14 @@ export const RAW_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env
 export const API_BASE_URL = RAW_BASE_URL.replace(/\/+$/, '');
 
 
-function getCsrfToken(): string | null {
+let memoryCsrfToken: string | null = null;
+
+export function setMemoryCsrfToken(token: string | null): void {
+  memoryCsrfToken = token;
+}
+
+export function getCsrfToken(): string | null {
+  if (memoryCsrfToken) return memoryCsrfToken;
   if (typeof document === 'undefined') return null;
   const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
   return match ? decodeURIComponent(match[1]) : null;
@@ -28,13 +35,35 @@ export async function apiRequest<T>(
     });
   }
 
-  const csrfToken = getCsrfToken();
+  const isMutation = Boolean(options?.method && options.method.toUpperCase() !== 'GET');
+  let csrfToken = getCsrfToken();
+
+  // If a mutation is sent without a known CSRF token, proactively fetch it from /auth/csrf/
+  if (isMutation && !csrfToken && !endpoint.includes('/auth/csrf')) {
+    try {
+      const csrfUrl = new URL(`${API_BASE_URL}/auth/csrf/`, baseOrigin);
+      const csrfRes = await fetch(csrfUrl.toString(), {
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      });
+      if (csrfRes.ok) {
+        const csrfData = (await csrfRes.json()) as { csrf_token?: string };
+        if (csrfData && typeof csrfData.csrf_token === 'string') {
+          csrfToken = csrfData.csrf_token;
+          setMemoryCsrfToken(csrfToken);
+        }
+      }
+    } catch {
+      // Continue if probe fails
+    }
+  }
+
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...((options?.headers as Record<string, string>) || {}),
   };
 
-  if (csrfToken && options?.method && options.method.toUpperCase() !== 'GET') {
+  if (csrfToken && isMutation) {
     headers['X-CSRFToken'] = csrfToken;
   }
 
@@ -43,6 +72,11 @@ export async function apiRequest<T>(
     ...options,
     headers,
   });
+
+  const csrfHeader = response.headers?.get ? response.headers.get('X-CSRFToken') : null;
+  if (csrfHeader) {
+    setMemoryCsrfToken(csrfHeader);
+  }
 
   if (!response.ok) {
     let errorData: unknown = null;
