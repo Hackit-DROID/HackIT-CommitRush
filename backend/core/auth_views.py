@@ -201,7 +201,7 @@ def github_login_view(request):
         signed_state,
         max_age=600,
         httponly=True,
-        samesite='Lax',
+        samesite=getattr(settings, 'SESSION_COOKIE_SAMESITE', 'Lax'),
         secure=getattr(settings, 'SESSION_COOKIE_SECURE', False),
         path='/',
     )

@@ -38,6 +38,7 @@ from core.views import custom_404_view
 from core.webhook_views import github_webhook_view
 
 urlpatterns = [
+    path('', health_view, name='root'),
     path('health/', health_view, name='health'),
     path('404/', custom_404_view, name='custom-404'),
     path('profile/', frontend_profile_redirect, name='profile-redirect'),
