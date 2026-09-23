@@ -143,6 +143,10 @@ CORS_ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 CORS_ALLOW_CREDENTIALS = True
+CORS_EXPOSE_HEADERS = [
+    'X-CSRFToken',
+    'Content-Type',
+]
 
 
 ROOT_URLCONF = 'commitrush.urls'

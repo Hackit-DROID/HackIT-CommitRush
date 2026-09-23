@@ -335,6 +335,7 @@ export interface CurrentUser {
   total_points: number;
   is_staff: boolean;
   is_authenticated: boolean;
+  csrf_token?: string;
 }
 
 export class ApiError extends Error {

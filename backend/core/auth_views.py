@@ -4,6 +4,7 @@ import urllib.parse
 from django.conf import settings
 from django.contrib.auth import login, logout
 from django.http import HttpResponseNotAllowed, HttpResponseRedirect, JsonResponse
+from django.middleware.csrf import get_token
 from django.utils.http import url_has_allowed_host_and_scheme
 
 from core.oauth import (
@@ -373,7 +374,25 @@ def me_view(request):
             'is_authenticated': True,
         }
 
-    return JsonResponse(data, status=200)
+    csrf_token = get_token(request)
+    data['csrf_token'] = csrf_token
+    response = JsonResponse(data, status=200)
+    response['X-CSRFToken'] = csrf_token
+    return response
+
+
+def csrf_view(request):
+    """
+    GET /auth/csrf/
+    Returns CSRF token and ensures the csrftoken cookie is set for cross-origin SPAs.
+    """
+    if request.method != 'GET':
+        return HttpResponseNotAllowed(['GET'])
+
+    csrf_token = get_token(request)
+    response = JsonResponse({'csrf_token': csrf_token}, status=200)
+    response['X-CSRFToken'] = csrf_token
+    return response
 
 
 def dev_login_view(request):

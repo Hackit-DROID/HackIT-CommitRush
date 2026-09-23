@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiRequest, API_BASE_URL } from './client';
+import { apiRequest, API_BASE_URL, setMemoryCsrfToken } from './client';
 import { CurrentUser, ApiError } from '../types/api';
 
 export const authKeys = {
@@ -20,7 +20,11 @@ export const UNAUTHENTICATED_USER: CurrentUser = {
 
 export async function fetchCurrentUser(): Promise<CurrentUser> {
   try {
-    return await apiRequest<CurrentUser>('/auth/me/');
+    const user = await apiRequest<CurrentUser>('/auth/me/');
+    if (user.csrf_token) {
+      setMemoryCsrfToken(user.csrf_token);
+    }
+    return user;
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) {
       return UNAUTHENTICATED_USER;
@@ -71,11 +75,13 @@ export function useLogout() {
   return useMutation({
     mutationFn: logoutUser,
     onSuccess: () => {
+      setMemoryCsrfToken(null);
       queryClient.setQueryData(authKeys.me, UNAUTHENTICATED_USER);
       queryClient.invalidateQueries({ queryKey: authKeys.me });
       window.location.href = '/';
     },
     onError: () => {
+      setMemoryCsrfToken(null);
       // Even on network error, reset client cache and navigate to root
       queryClient.setQueryData(authKeys.me, UNAUTHENTICATED_USER);
       window.location.href = '/';
