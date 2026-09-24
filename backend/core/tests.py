@@ -228,7 +228,7 @@ class EventConfigSingletonTestCase(TestCase):
         self.assertEqual(config.pk, 1)
         self.assertEqual(config.merge_concurrency, 5)
         self.assertEqual(config.max_contributions_per_day, 5)
-        self.assertEqual(config.max_points_per_day, 500)
+        self.assertEqual(config.max_points_per_day, 120)
         self.assertFalse(config.merge_paused)
         self.assertFalse(config.validation_paused)
         self.assertFalse(config.submissions_paused)

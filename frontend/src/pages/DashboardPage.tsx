@@ -43,7 +43,7 @@ export function DashboardPage() {
 
   const { participant, rank, total_points, merged_count, daily_usage, in_progress_contributions, recent_activity } = data;
 
-  const pointsCap = daily_usage?.max_points || 500;
+  const pointsCap = daily_usage?.max_points || 120;
   const pointsClaimed = daily_usage?.points_count || 0;
   const pointsPct = Math.min(100, Math.round((pointsClaimed / pointsCap) * 100));
 
@@ -142,7 +142,7 @@ export function DashboardPage() {
                   </span>
                 ) : null}
               </div>
-              <p className="text-xs text-[#777777]">Resets daily at 00:00 UTC</p>
+              <p className="text-xs text-[#777777]">Resets daily at 00:00 IST</p>
             </div>
             <div className="text-right shrink-0">
               <span className="text-lg font-mono font-black text-[#ff5a1f] tabular-nums">{pointsClaimed}</span>

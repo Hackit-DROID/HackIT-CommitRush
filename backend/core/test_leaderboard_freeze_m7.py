@@ -38,6 +38,7 @@ class LeaderboardFreezeTests(TestCase):
         self.config = EventConfig.get_solo()
         self.config.leaderboard_frozen = False
         self.config.per_pr_max_points = 500
+        self.config.max_points_per_day = 500
         self.config.category_multipliers = {'feature': 1.0}
         self.config.save()
 

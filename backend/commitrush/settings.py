@@ -177,15 +177,30 @@ WSGI_APPLICATION = 'commitrush.wsgi.application'
 DATABASE_URL = os.environ.get('DATABASE_URL')
 USE_SQLITE_ENV = os.environ.get('USE_SQLITE')
 
-# When DATABASE_URL is present, PostgreSQL takes precedence over SQLite unless explicitly pointing to a sqlite scheme.
-if DATABASE_URL:
-    USE_SQLITE = False
+is_test_run = len(sys.argv) > 1 and sys.argv[1] == 'test'
+
+# When USE_SQLITE is explicitly requested or running tests locally without FORCE_POSTGRES_TESTS, use SQLite.
+# In production / dev runtime with DATABASE_URL, PostgreSQL takes precedence.
+if is_test_run and not os.environ.get('FORCE_POSTGRES_TESTS'):
+    USE_SQLITE = True
 elif USE_SQLITE_ENV is not None:
     USE_SQLITE = USE_SQLITE_ENV.lower() in ('true', '1', 'yes') or os.environ.get('DB_ENGINE') == 'sqlite3'
+elif DATABASE_URL:
+    USE_SQLITE = False
 else:
     USE_SQLITE = not bool(os.environ.get('DB_HOST') or os.environ.get('DB_NAME'))
 
-if DATABASE_URL:
+if USE_SQLITE:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+            'OPTIONS': {
+                'timeout': 60,
+            },
+        }
+    }
+elif DATABASE_URL:
     import urllib.parse
     parsed_db = urllib.parse.urlparse(DATABASE_URL)
     is_sqlite_url = parsed_db.scheme.startswith('sqlite')
@@ -231,16 +246,6 @@ if DATABASE_URL:
                 'OPTIONS': db_options,
             }
         }
-elif USE_SQLITE and not os.environ.get('DB_HOST') and not os.environ.get('DB_NAME'):
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
-            'OPTIONS': {
-                'timeout': 60,
-            },
-        }
-    }
 else:
     db_options = {}
     db_host = os.environ.get('DB_HOST', 'localhost')
@@ -293,11 +298,16 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+# CommitRush operates in India with daily allowances resetting at midnight IST (PRD §14, §15)
+CHALLENGE_TIMEZONE = os.environ.get('CHALLENGE_TIMEZONE', 'Asia/Kolkata')
+TIME_ZONE = CHALLENGE_TIMEZONE
 
 USE_I18N = True
 
 USE_TZ = True
+
+# Single authoritative backend source of truth for daily points cap (PRD §14, §15)
+DAILY_POINTS_LIMIT = int(os.environ.get('DAILY_POINTS_LIMIT', '120'))
 
 
 # Static files (CSS, JavaScript, Images)

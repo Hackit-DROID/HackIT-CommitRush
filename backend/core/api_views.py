@@ -20,6 +20,7 @@ from core.github_sync import (
     sync_repository_and_issues,
 )
 from core.leaderboard import calculate_participant_rank, fetch_leaderboard_data, invalidate_leaderboard_cache
+from core.timezone import get_challenge_today
 from core.models import (
     AuditLog,
     Contribution,
@@ -379,28 +380,63 @@ class IssueListView(generics.ListAPIView):
     pagination_class = IssuePagination
 
     SORT_MAPPINGS = {
-        'points': ['points', '-created_at', '-id'],
-        '-points': ['-points', '-created_at', '-id'],
-        'newest': ['-created_at', '-id'],
-        '-newest': ['created_at', 'id'],
-        'oldest': ['created_at', 'id'],
+        'points': ['points', 'number', 'id'],
+        '-points': ['-points', '-number', '-id'],
+        'newest': ['-created_at', '-number', '-id'],
+        '-newest': ['created_at', 'number', 'id'],
+        'oldest': ['created_at', 'number', 'id'],
+        '-oldest': ['-created_at', '-number', '-id'],
+        'updated': ['-updated_at', '-number', '-id'],
+        '-updated': ['updated_at', 'number', 'id'],
+        'recently_updated': ['-updated_at', '-number', '-id'],
+        'number': ['number', 'id'],
+        '-number': ['-number', '-id'],
         'id': ['id'],
         '-id': ['-id'],
+    }
+
+    DIFFICULTY_TIER_MAPPINGS = {
+        'beginner': ['beginner', 'starter', 'easy'],
+        'starter': ['beginner', 'starter', 'easy'],
+        'easy': ['beginner', 'starter', 'easy'],
+        'intermediate': ['intermediate', 'medium'],
+        'medium': ['intermediate', 'medium'],
+        'advanced': ['advanced', 'hard', 'master', 'expert'],
+        'hard': ['advanced', 'hard', 'master', 'expert'],
+        'master': ['master', 'advanced', 'hard', 'expert'],
+        'expert': ['expert', 'master', 'advanced', 'hard'],
+    }
+
+    CATEGORY_SYNONYMS = {
+        'features': 'feature',
+        'bugs': 'bug',
+        'tests': 'test',
+        'docs': 'docs',
+        'documentation': 'docs',
+        'securities': 'security',
+        'refactors': 'refactor',
+        'validations': 'validation',
     }
 
     def get_queryset(self):
         queryset = Issue.objects.select_related('project').prefetch_related('labels')
         params = self.request.query_params
 
-        # Filter: project
-        project_param = params.get('project')
+        # Filter: project / repo / search (case-insensitive, trimmed partial match)
+        project_param = params.get('project') or params.get('repo') or params.get('search')
         if project_param:
             proj_slug = project_param.strip()
             if proj_slug:
-                q_project = Q(project__full_name__iexact=proj_slug) | Q(project__name__iexact=proj_slug)
+                q_project = (
+                    Q(project__full_name__icontains=proj_slug)
+                    | Q(project__name__icontains=proj_slug)
+                )
                 if '-' in proj_slug and '/' not in proj_slug:
                     converted_slug = proj_slug.replace('-', '/', 1)
-                    q_project |= Q(project__full_name__iexact=converted_slug)
+                    q_project |= (
+                        Q(project__full_name__iexact=converted_slug)
+                        | Q(project__full_name__icontains=converted_slug)
+                    )
                 queryset = queryset.filter(q_project)
 
         # Filter: language
@@ -408,26 +444,35 @@ class IssueListView(generics.ListAPIView):
         if language:
             clean_lang = language.strip()
             if clean_lang:
-                queryset = queryset.filter(project__language__iexact=clean_lang)
+                queryset = queryset.filter(
+                    Q(project__language__iexact=clean_lang) | Q(project__language__icontains=clean_lang)
+                )
 
-        # Filter: difficulty
+        # Filter: difficulty (deterministic canonical tier mapping with exact match fallback)
         difficulty = params.get('difficulty')
         if difficulty:
-            clean_diff = difficulty.strip()
+            clean_diff = difficulty.strip().lower()
             if clean_diff:
-                queryset = queryset.filter(difficulty__iexact=clean_diff)
+                if clean_diff in self.DIFFICULTY_TIER_MAPPINGS:
+                    tier_values = self.DIFFICULTY_TIER_MAPPINGS[clean_diff]
+                    queryset = queryset.filter(difficulty__in=tier_values)
+                else:
+                    queryset = queryset.filter(difficulty__iexact=clean_diff)
 
         # Filter: category
         category = params.get('category')
         if category:
-            clean_cat = category.strip()
+            clean_cat = category.strip().lower()
             if clean_cat:
-                queryset = queryset.filter(category__iexact=clean_cat)
+                canonical_cat = self.CATEGORY_SYNONYMS.get(clean_cat, clean_cat)
+                queryset = queryset.filter(
+                    Q(category__iexact=canonical_cat) | Q(category__iexact=clean_cat)
+                )
 
         # Filter: status
         status_param = params.get('status')
         if status_param:
-            clean_status = status_param.strip()
+            clean_status = status_param.strip().lower()
             if clean_status:
                 queryset = queryset.filter(status__iexact=clean_status)
 
@@ -818,7 +863,7 @@ class DashboardView(APIView):
             raise NotFound("Participant profile not found for authenticated user.")
 
         config = EventConfig.get_solo()
-        today = timezone.now().date()
+        today = get_challenge_today()
 
         # Authoritative daily usage (read-only query; avoid DB write on GET)
         daily_usage = DailyContributionUsage.objects.filter(

@@ -8,6 +8,7 @@ from django.db.models.functions import RowNumber
 from django.utils import timezone
 
 from core.models import DailyContributionUsage, EventConfig, Participant
+from core.timezone import get_challenge_today
 
 
 logger = logging.getLogger(__name__)
@@ -166,7 +167,7 @@ def fetch_leaderboard_data(page: int = 1, page_size: int = 20, current_participa
             results = []
         else:
             qs = list(get_leaderboard_queryset()[offset : offset + page_size])
-            today = timezone.now().date()
+            today = get_challenge_today()
             participant_ids = [row.id for row in qs]
             daily_usages = {
                 u.participant_id: u
@@ -209,7 +210,7 @@ def fetch_leaderboard_data(page: int = 1, page_size: int = 20, current_participa
     if current_participant is not None:
         rank = calculate_participant_rank(current_participant.id)
         if rank is not None:
-            today = timezone.now().date()
+            today = get_challenge_today()
             me_usage = DailyContributionUsage.objects.filter(participant=current_participant, date=today).first()
             me_pts_today = me_usage.points_count if me_usage else 0
             me_contribs_today = me_usage.contributions_count if me_usage else 0

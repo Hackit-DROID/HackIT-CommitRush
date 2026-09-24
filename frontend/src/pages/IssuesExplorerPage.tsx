@@ -303,6 +303,7 @@ export function IssuesExplorerPage() {
                 <option value="points" className="bg-white text-[#111111]">Sort: Lowest Points First</option>
                 <option value="newest" className="bg-white text-[#111111]">Sort: Newest Issues First</option>
                 <option value="oldest" className="bg-white text-[#111111]">Sort: Oldest Issues First</option>
+                <option value="updated" className="bg-white text-[#111111]">Sort: Recently Updated</option>
               </select>
               <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-[#555555]">
                 <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">

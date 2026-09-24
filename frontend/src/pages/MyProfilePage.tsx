@@ -120,7 +120,7 @@ export function MyProfilePage() {
     recent_activity,
   } = dashboard;
 
-  const pointsCap = daily_usage?.max_points || 500;
+  const pointsCap = daily_usage?.max_points || 120;
   const pointsClaimed = daily_usage?.points_count || 0;
   const pointsRemaining = Math.max(0, pointsCap - pointsClaimed);
   const pointsPct = Math.min(100, Math.round((pointsClaimed / pointsCap) * 100));

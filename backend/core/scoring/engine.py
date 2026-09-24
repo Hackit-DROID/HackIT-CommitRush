@@ -3,6 +3,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from core.leaderboard import invalidate_leaderboard_cache
+from core.timezone import get_challenge_today
 from core.models import (
     Contribution,
     DailyContributionUsage,
@@ -200,7 +201,7 @@ class ScoringEngine:
 
             participant = Participant.objects.select_for_update().get(id=contribution.participant_id)
             config = EventConfig.get_solo()
-            today = timezone.now().date()
+            today = get_challenge_today()
 
             # Suspended participant gating
             if participant.is_suspended:

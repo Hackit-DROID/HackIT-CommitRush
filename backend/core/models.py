@@ -181,6 +181,10 @@ class Issue(models.Model):
         default=timezone.now,
         help_text='Issue creation timestamp',
     )
+    updated_at = models.DateTimeField(
+        default=timezone.now,
+        help_text='Issue updated timestamp on GitHub',
+    )
     created_by_github_id = models.BigIntegerField(
         null=True,
         blank=True,
@@ -192,7 +196,10 @@ class Issue(models.Model):
             models.Index(fields=['project', 'status'], name='issue_project_status_idx'),
             models.Index(fields=['points'], name='issue_points_idx'),
             models.Index(fields=['difficulty'], name='issue_difficulty_idx'),
+            models.Index(fields=['category'], name='issue_category_idx'),
+            models.Index(fields=['project', 'number'], name='issue_proj_num_idx'),
             models.Index(fields=['-created_at'], name='issue_created_at_idx'),
+            models.Index(fields=['-updated_at'], name='issue_updated_at_idx'),
         ]
 
     def __str__(self):
@@ -538,7 +545,7 @@ class EventConfig(models.Model):
         help_text='Daily contribution credit cap per participant',
     )
     max_points_per_day = models.IntegerField(
-        default=500,
+        default=120,
         help_text='Daily points cap per participant',
     )
     per_pr_max_points = models.IntegerField(
@@ -638,7 +645,7 @@ class EventConfig(models.Model):
             defaults={
                 'merge_concurrency': 5,
                 'max_contributions_per_day': 5,
-                'max_points_per_day': 500,
+                'max_points_per_day': getattr(settings, 'DAILY_POINTS_LIMIT', 120),
                 'per_pr_max_points': 100,
                 'category_multipliers': DEFAULT_CATEGORY_MULTIPLIERS,
                 'allow_partial_daily_points': True,

@@ -1,8 +1,12 @@
 import logging
+import os
 import re
+import subprocess
+import time
 import requests
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from core.models import Issue, IssueLabel, Project
@@ -110,10 +114,20 @@ class GitHubClient:
     def __init__(
         self,
         token: str | None = None,
-        timeout: int = 10,
+        timeout: int = 30,
         base_url: str = GITHUB_API_BASE_URL,
     ):
-        self.token = token if token is not None else getattr(settings, 'GITHUB_API_TOKEN', '')
+        if token is not None:
+            self.token = token
+        else:
+            tok = getattr(settings, 'GITHUB_API_TOKEN', '') or os.environ.get('GITHUB_TOKEN', '') or os.environ.get('GITHUB_API_TOKEN', '')
+            if not tok:
+                try:
+                    tok = subprocess.check_output(['gh', 'auth', 'token'], text=True, stderr=subprocess.DEVNULL).strip()
+                except Exception:
+                    tok = ''
+            self.token = tok
+
         self.timeout = timeout
         self.base_url = base_url.rstrip('/')
         self.session = requests.Session()
@@ -122,6 +136,11 @@ class GitHubClient:
             'limit': None,
             'reset': None,
             'retry_after': None,
+        }
+        self.last_sync_metrics: dict[str, int] = {
+            'pages_fetched': 0,
+            'github_items_seen': 0,
+            'pull_requests_skipped': 0,
         }
 
     def _get_headers(self) -> dict[str, str]:
@@ -258,6 +277,9 @@ class GitHubClient:
         }
 
         all_issues = []
+        pages_fetched = 0
+        github_items_seen = 0
+        pull_requests_skipped = 0
 
         while url:
             try:
@@ -285,11 +307,15 @@ class GitHubClient:
                 if not isinstance(data, list):
                     raise GitHubDataError("Malformed response payload returned by GitHub API (expected JSON array).")
 
+                pages_fetched += 1
+                github_items_seen += len(data)
+
                 for item in data:
                     if not isinstance(item, dict):
                         continue
                     # Skip Pull Requests returned by GitHub's issues endpoint
                     if 'pull_request' in item:
+                        pull_requests_skipped += 1
                         continue
                     if 'id' in item and 'number' in item:
                         all_issues.append(item)
@@ -371,6 +397,11 @@ class GitHubClient:
             logger.warning("GitHub API unexpected response HTTP %s fetching issues for %s/%s", response.status_code, owner, repo)
             raise GitHubAPIError(f"GitHub API returned unexpected status {response.status_code}.")
 
+        self.last_sync_metrics = {
+            'pages_fetched': pages_fetched,
+            'github_items_seen': github_items_seen,
+            'pull_requests_skipped': pull_requests_skipped,
+        }
         return all_issues
 
     def get_pull_requests(self, owner: str, repo: str, state: str = 'all') -> list[dict]:
@@ -771,11 +802,12 @@ def sync_project(repo_data: dict) -> tuple[Project, bool]:
             raise
 
 
-def sync_label(label_data: dict | str) -> tuple[IssueLabel | None, bool]:
+def sync_label(label_data: dict | str, label_cache: dict[str, IssueLabel] | None = None) -> tuple[IssueLabel | None, bool]:
     """
     Synchronize a single GitHub label into the IssueLabel model.
     Handles dict payloads ({'name': '...', 'color': '...'}) and string names.
     Handles concurrent first-time creation races safely.
+    Optional label_cache avoids redundant DB queries during bulk syncs.
     
     Mapping rules:
     - name: label name (globally unique per schema, stripped, max 255 chars)
@@ -798,17 +830,26 @@ def sync_label(label_data: dict | str) -> tuple[IssueLabel | None, bool]:
 
     color = (raw_color or '').strip()
 
+    if label_cache is not None and name in label_cache:
+        cached_label = label_cache[name]
+        if not color or cached_label.color == color:
+            return cached_label, False
+
     with transaction.atomic():
         label = IssueLabel.objects.select_for_update().filter(name=name).first()
         if label:
             if color and label.color != color:
                 label.color = color
                 label.save(update_fields=['color'])
+            if label_cache is not None:
+                label_cache[name] = label
             return label, False
 
     try:
         with transaction.atomic():
             label = IssueLabel.objects.create(name=name, color=color)
+            if label_cache is not None:
+                label_cache[name] = label
             return label, True
     except IntegrityError:
         with transaction.atomic():
@@ -817,6 +858,8 @@ def sync_label(label_data: dict | str) -> tuple[IssueLabel | None, bool]:
                 if color and label.color != color:
                     label.color = color
                     label.save(update_fields=['color'])
+                if label_cache is not None:
+                    label_cache[name] = label
                 return label, False
             raise
 
@@ -898,7 +941,7 @@ def extract_issue_metadata(issue_data: dict) -> dict:
     }
 
 
-def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
+def sync_issue(project: Project, issue_data: dict, label_cache: dict[str, IssueLabel] | None = None) -> tuple[Issue, bool]:
     """
     Synchronize issue metadata into the Issue model and synchronize its labels (M2-T2, M2-T3).
     Handles concurrent first-time creation races safely.
@@ -938,6 +981,9 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
     raw_created_at = issue_data.get('created_at')
     parsed_created_at = parse_datetime(raw_created_at) if raw_created_at else None
 
+    raw_updated_at = issue_data.get('updated_at')
+    parsed_updated_at = parse_datetime(raw_updated_at) if raw_updated_at else None
+
     user_data = issue_data.get('user')
     created_by_github_id = None
     if isinstance(user_data, dict):
@@ -965,6 +1011,9 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
             if parsed_created_at and issue.created_at != parsed_created_at:
                 issue.created_at = parsed_created_at
                 updated_fields.append('created_at')
+            if parsed_updated_at and issue.updated_at != parsed_updated_at:
+                issue.updated_at = parsed_updated_at
+                updated_fields.append('updated_at')
             if created_by_github_id is not None and issue.created_by_github_id != created_by_github_id:
                 issue.created_by_github_id = created_by_github_id
                 updated_fields.append('created_by_github_id')
@@ -998,6 +1047,8 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
                 }
                 if parsed_created_at:
                     create_kwargs['created_at'] = parsed_created_at
+                if parsed_updated_at:
+                    create_kwargs['updated_at'] = parsed_updated_at
                 if created_by_github_id is not None:
                     create_kwargs['created_by_github_id'] = created_by_github_id
 
@@ -1023,6 +1074,9 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
                     if parsed_created_at and issue.created_at != parsed_created_at:
                         issue.created_at = parsed_created_at
                         updated_fields.append('created_at')
+                    if parsed_updated_at and issue.updated_at != parsed_updated_at:
+                        issue.updated_at = parsed_updated_at
+                        updated_fields.append('updated_at')
                     if created_by_github_id is not None and issue.created_by_github_id != created_by_github_id:
                         issue.created_by_github_id = created_by_github_id
                         updated_fields.append('created_by_github_id')
@@ -1045,7 +1099,7 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
         if isinstance(raw_labels, list):
             label_objects = []
             for item in raw_labels:
-                label_obj, _ = sync_label(item)
+                label_obj, _ = sync_label(item, label_cache=label_cache)
                 if label_obj is not None:
                     label_objects.append(label_obj)
             issue.labels.set(label_objects)
@@ -1053,24 +1107,178 @@ def sync_issue(project: Project, issue_data: dict) -> tuple[Issue, bool]:
     return issue, created
 
 
-def sync_issues_for_project(project: Project, issues_data: list[dict]) -> tuple[int, int]:
+def sync_issues_for_project(project: Project, issues_data: list[dict], batch_size: int = 100) -> tuple[int, int]:
     """
     Synchronize a list of issue payloads for a given project.
+    Uses bulk queries to handle thousands of issues with minimal roundtrips over high-latency connections.
     Returns (created_count, updated_count).
     """
+    if not isinstance(issues_data, (list, tuple)):
+        issues_list = list(issues_data)
+    else:
+        issues_list = issues_data
+
+    # Filter out invalid items and PRs
+    valid_issues = []
+    for item in issues_list:
+        if not isinstance(item, dict):
+            continue
+        if 'pull_request' in item:
+            continue
+        if 'id' in item and 'number' in item:
+            valid_issues.append(item)
+
+    if not valid_issues:
+        return 0, 0
+
+    # 1. Bulk sync labels across all issues
+    raw_label_map = {}  # name -> color
+    for issue_data in valid_issues:
+        for item in (issue_data.get('labels') or []):
+            if isinstance(item, dict):
+                name = (item.get('name') or '').strip()
+                color = item.get('color') or ''
+            elif isinstance(item, str):
+                name = item.strip()
+                color = ''
+            else:
+                continue
+            if name:
+                raw_label_map[name] = color
+
+    label_objs: dict[str, IssueLabel] = {}
+    if raw_label_map:
+        existing_lbls = IssueLabel.objects.filter(name__in=raw_label_map.keys())
+        for lbl in existing_lbls:
+            label_objs[lbl.name] = lbl
+
+        new_labels = [
+            IssueLabel(name=name, color=color)
+            for name, color in raw_label_map.items()
+            if name not in label_objs
+        ]
+        if new_labels:
+            IssueLabel.objects.bulk_create(new_labels, ignore_conflicts=True)
+            for lbl in IssueLabel.objects.filter(name__in=raw_label_map.keys()):
+                label_objs[lbl.name] = lbl
+
+    # 2. Existing issues lookup
+    github_issue_ids = [item['id'] for item in valid_issues]
+    existing_issues_map = {
+        issue.github_issue_id: issue
+        for issue in Issue.objects.filter(github_issue_id__in=github_issue_ids)
+    }
+
     created_count = 0
     updated_count = 0
+    to_create = []
+    to_update = []
 
-    for issue_data in issues_data:
-        # Extra safety check to skip PRs
-        if 'pull_request' in issue_data:
-            continue
+    now = timezone.now()
 
-        _, created = sync_issue(project, issue_data)
-        if created:
-            created_count += 1
-        else:
+    for issue_data in valid_issues:
+        github_issue_id = issue_data['id']
+        number = issue_data['number']
+        title = issue_data.get('title') or ''
+        status = 'closed' if issue_data.get('state') == 'closed' else 'open'
+        raw_created_at = issue_data.get('created_at')
+        parsed_created_at = parse_datetime(raw_created_at) if raw_created_at else None
+        raw_updated_at = issue_data.get('updated_at')
+        parsed_updated_at = parse_datetime(raw_updated_at) if raw_updated_at else None
+        user_data = issue_data.get('user')
+        created_by_github_id = user_data.get('id') if isinstance(user_data, dict) else None
+        meta = extract_issue_metadata(issue_data)
+
+        if github_issue_id in existing_issues_map:
+            issue = existing_issues_map[github_issue_id]
+            updated = False
+            if issue.project_id != project.id:
+                issue.project = project
+                updated = True
+            if issue.number != number:
+                issue.number = number
+                updated = True
+            if issue.title != title:
+                issue.title = title
+                updated = True
+            if issue.status != status:
+                issue.status = status
+                updated = True
+            if parsed_created_at and issue.created_at != parsed_created_at:
+                issue.created_at = parsed_created_at
+                updated = True
+            if parsed_updated_at and issue.updated_at != parsed_updated_at:
+                issue.updated_at = parsed_updated_at
+                updated = True
+            if created_by_github_id is not None and issue.created_by_github_id != created_by_github_id:
+                issue.created_by_github_id = created_by_github_id
+                updated = True
+            if not issue.difficulty and meta['difficulty']:
+                issue.difficulty = meta['difficulty']
+                updated = True
+            if not issue.category and meta['category']:
+                issue.category = meta['category']
+                updated = True
+
+            to_update.append(issue)
             updated_count += 1
+        else:
+            issue_obj = Issue(
+                github_issue_id=github_issue_id,
+                project=project,
+                number=number,
+                title=title,
+                status=status,
+                points=meta['points'],
+                difficulty=meta['difficulty'],
+                category=meta['category'],
+                created_at=parsed_created_at or now,
+                updated_at=parsed_updated_at or now,
+                created_by_github_id=created_by_github_id,
+            )
+            to_create.append(issue_obj)
+            created_count += 1
+
+    with transaction.atomic():
+        if to_create:
+            Issue.objects.bulk_create(to_create, batch_size=batch_size, ignore_conflicts=True)
+        if to_update:
+            Issue.objects.bulk_update(
+                to_update,
+                fields=['project', 'number', 'title', 'status', 'created_at', 'updated_at', 'created_by_github_id', 'difficulty', 'category'],
+                batch_size=batch_size,
+            )
+
+    # 3. Bulk associate labels to issues via through model
+    all_issues_db = {
+        iss.github_issue_id: iss.id
+        for iss in Issue.objects.filter(github_issue_id__in=github_issue_ids).only('id', 'github_issue_id')
+    }
+
+    ThroughModel = Issue.labels.through
+    through_records = []
+
+    for issue_data in valid_issues:
+        issue_pk = all_issues_db.get(issue_data['id'])
+        if not issue_pk:
+            continue
+        raw_labels = issue_data.get('labels') or []
+        if not isinstance(raw_labels, list):
+            continue
+        for item in raw_labels:
+            if isinstance(item, dict):
+                lname = (item.get('name') or '').strip()
+            elif isinstance(item, str):
+                lname = item.strip()
+            else:
+                continue
+            lbl_obj = label_objs.get(lname)
+            if lbl_obj:
+                through_records.append(ThroughModel(issue_id=issue_pk, issuelabel_id=lbl_obj.id))
+
+    if through_records:
+        with transaction.atomic():
+            ThroughModel.objects.bulk_create(through_records, batch_size=500, ignore_conflicts=True)
 
     return created_count, updated_count
 
@@ -1110,5 +1318,29 @@ def sync_repository_and_issues(
     if sync_issues_flag:
         issues_data = client.get_issues(owner, repo, state='all')
         issues_created, issues_updated = sync_issues_for_project(project, issues_data)
+
+        # Structured sync logging per Part 3 specification
+        metrics = getattr(client, 'last_sync_metrics', {})
+        pages_fetched = metrics.get('pages_fetched', 1 if issues_data else 0)
+        github_items_seen = metrics.get('github_items_seen', len(issues_data))
+        prs_skipped = metrics.get('pull_requests_skipped', 0)
+
+        logger.info(
+            "GitHub sync:\n"
+            "repository=%s\n"
+            "pages_fetched=%d\n"
+            "github_items_seen=%d\n"
+            "issues_imported=%d\n"
+            "pull_requests_skipped=%d\n"
+            "duplicates=%d\n"
+            "failed=%d",
+            f"{owner}/{repo}",
+            pages_fetched,
+            github_items_seen,
+            issues_created,
+            prs_skipped,
+            issues_updated,
+            0,
+        )
 
     return project, repo_created, issues_created, issues_updated

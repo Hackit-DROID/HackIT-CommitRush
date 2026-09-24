@@ -329,8 +329,8 @@ class LeaderboardEntrySerializer(serializers.Serializer):
     total_points = serializers.IntegerField(read_only=True)
     merged_count = serializers.IntegerField(read_only=True)
     points_today = serializers.IntegerField(read_only=True, default=0)
-    daily_limit = serializers.IntegerField(read_only=True, default=500)
-    remaining_daily_allowance = serializers.IntegerField(read_only=True, default=500)
+    daily_limit = serializers.IntegerField(read_only=True, default=120)
+    remaining_daily_allowance = serializers.IntegerField(read_only=True, default=120)
     is_daily_limit_reached = serializers.BooleanField(read_only=True, default=False)
 
 
