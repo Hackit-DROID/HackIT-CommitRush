@@ -489,6 +489,79 @@ class GitHubClient:
 
         return all_prs
 
+    def get_issue(self, owner: str, repo: str, issue_number: int) -> dict:
+        """
+        Fetch a single issue from GET /repos/{owner}/{repo}/issues/{issue_number}.
+        Returns issue metadata dict.
+        """
+        if not owner or not repo or not issue_number:
+            raise ValueError("Owner, repository name, and issue_number must be specified.")
+
+        url = f"{self.base_url}/repos/{owner}/{repo}/issues/{issue_number}"
+        headers = self._get_headers()
+
+        try:
+            response = self.session.get(
+                url,
+                headers=headers,
+                timeout=self.timeout,
+            )
+        except requests.Timeout as e:
+            logger.warning("GitHub API request timed out fetching issue #%s for %s/%s", issue_number, owner, repo)
+            raise GitHubNetworkError(f"GitHub API request timed out after {self.timeout}s.") from e
+        except requests.RequestException as e:
+            logger.warning("GitHub API network failure fetching issue #%s for %s/%s", issue_number, owner, repo)
+            raise GitHubNetworkError("Failed to communicate with GitHub REST API.") from e
+
+        self._record_rate_limit(response)
+
+        if response.status_code == 200:
+            try:
+                data = response.json()
+            except ValueError as e:
+                raise GitHubDataError("Invalid JSON returned by GitHub API.") from e
+            if not isinstance(data, dict):
+                raise GitHubDataError("Malformed response payload returned by GitHub API.")
+            return data
+
+        if response.status_code == 404:
+            logger.info("Issue #%s on %s/%s not found (HTTP 404)", issue_number, owner, repo)
+            raise GitHubResourceNotFoundError(f"Issue #{issue_number} on '{owner}/{repo}' was not found on GitHub (HTTP 404).")
+
+        if response.status_code == 401:
+            logger.warning("GitHub authentication failed for %s/%s (HTTP 401)", owner, repo)
+            raise GitHubAuthenticationError("GitHub API authentication failed (HTTP 401). Verify GITHUB_API_TOKEN configuration.")
+
+        if response.status_code == 403:
+            rate_remaining = response.headers.get('X-RateLimit-Remaining')
+            if rate_remaining == '0':
+                logger.warning("GitHub API rate limit reached (HTTP 403)")
+                raise GitHubRateLimitError(
+                    "GitHub API rate limit exceeded (HTTP 403).",
+                    remaining=0,
+                    limit=self.last_rate_limit.get('limit'),
+                    reset_timestamp=self.last_rate_limit.get('reset'),
+                    retry_after=self.last_rate_limit.get('retry_after'),
+                )
+            logger.warning("GitHub API permission denied or rate limited (HTTP 403) for %s/%s", owner, repo)
+            raise GitHubAuthenticationError(f"GitHub API permission denied or rate limited (HTTP 403) for '{owner}/{repo}'.")
+
+        if response.status_code == 429:
+            logger.warning("GitHub API rate limit reached (HTTP 429)")
+            raise GitHubRateLimitError(
+                "GitHub API rate limit reached (HTTP 429).",
+                remaining=self.last_rate_limit.get('remaining'),
+                limit=self.last_rate_limit.get('limit'),
+                reset_timestamp=self.last_rate_limit.get('reset'),
+                retry_after=self.last_rate_limit.get('retry_after'),
+            )
+
+        if response.status_code >= 500:
+            logger.warning("GitHub API server error HTTP %s for %s/%s issue #%s", response.status_code, owner, repo, issue_number)
+            raise GitHubAPIError(f"GitHub API server error (HTTP {response.status_code}).")
+
+        raise GitHubAPIError(f"GitHub API returned unexpected status {response.status_code}.")
+
     def get_pull_request(self, owner: str, repo: str, pull_number: int) -> dict:
         """
         Fetch a single pull request from GET /repos/{owner}/{repo}/pulls/{pull_number}.
@@ -1154,14 +1227,49 @@ def sync_repository_by_name(repo_identifier: str, client: GitHubClient | None = 
     return sync_project(repo_data)
 
 
+class SyncResult(tuple):
+    """
+    Tuple-compatible result container returned by sync_repository_and_issues.
+    Provides complete backwards compatibility for existing 4-tuple unpacking:
+    `project, repo_created, issues_created, issues_updated = sync_repository_and_issues(...)`
+    while exposing `prs_reconciled` and other metadata as attributes.
+    """
+    def __new__(
+        cls,
+        project: Project,
+        repo_created: bool,
+        issues_created: int,
+        issues_updated: int,
+        prs_reconciled: int = 0,
+    ):
+        instance = super().__new__(cls, (project, repo_created, issues_created, issues_updated))
+        instance.project = project
+        instance.repo_created = repo_created
+        instance.issues_created = issues_created
+        instance.issues_updated = issues_updated
+        instance.prs_reconciled = prs_reconciled
+        return instance
+
+    def __iter__(self):
+        return iter((self.project, self.repo_created, self.issues_created, self.issues_updated))
+
+    def __getitem__(self, index):
+        return (self.project, self.repo_created, self.issues_created, self.issues_updated)[index]
+
+    def __len__(self):
+        return 4
+
+
 def sync_repository_and_issues(
     repo_identifier: str,
     client: GitHubClient | None = None,
     sync_issues_flag: bool = True,
-) -> tuple[Project, bool, int, int]:
+    sync_prs_flag: bool = True,
+) -> SyncResult:
     """
-    Fetch and synchronize repository metadata and all its issues.
-    Returns (project, repo_created: bool, issues_created: int, issues_updated: int).
+    Fetch and synchronize repository metadata, issues, and pull requests.
+    Returns SyncResult(project, repo_created, issues_created, issues_updated, prs_reconciled)
+    which unpacks as a 4-tuple for full backward compatibility.
     """
     owner, repo = parse_repo_identifier(repo_identifier)
     if client is None:
@@ -1172,9 +1280,19 @@ def sync_repository_and_issues(
 
     issues_created = 0
     issues_updated = 0
+    prs_reconciled = 0
 
     if sync_issues_flag:
         issues_data = client.get_issues(owner, repo, state='all')
         issues_created, issues_updated = sync_issues_for_project(project, issues_data)
 
-    return project, repo_created, issues_created, issues_updated
+    if sync_prs_flag:
+        try:
+            from core.reconciliation import reconcile_repository
+            recon_res = reconcile_repository(project, client=client, sync_issues=False)
+            prs_reconciled = recon_res.get('prs_reconciled', 0)
+        except Exception as e:
+            logger.warning("Error reconciling PRs during sync_repository_and_issues for %s: %s", repo_identifier, e)
+
+    return SyncResult(project, repo_created, issues_created, issues_updated, prs_reconciled=prs_reconciled)
+

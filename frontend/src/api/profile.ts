@@ -12,5 +12,7 @@ export function usePublicProfile(username: string | undefined) {
     queryFn: () => fetchPublicProfile(username!),
     enabled: Boolean(username && username.trim()),
     staleTime: 30_000,
+    refetchInterval: 30_000,
   });
 }
+

@@ -3,12 +3,13 @@ from core.api_views import (
     AdminAuditLogListView,
     AdminFarmingReviewListView,
     AdminGitHubSyncView,
-
     AdminIssueDetailView,
     AdminIssueListView,
+    AdminMonitoringStatusView,
     AdminOpsMetricsView,
     AdminParticipantDetailView,
     AdminParticipantModerationView,
+    AdminPipelineConsistencyView,
     AdminPointAdjustmentView,
     AdminSystemControlsView,
     ContributionDetailView,
@@ -34,13 +35,21 @@ from core.auth_views import (
     logout_view,
     me_view,
 )
-from core.health_views import health_view
+from core.health_views import (
+    detailed_health_view,
+    health_view,
+    liveness_view,
+    readiness_view,
+)
 from core.views import custom_404_view
 from core.webhook_views import github_webhook_view
 
 urlpatterns = [
     path('', health_view, name='root'),
     path('health/', health_view, name='health'),
+    path('health/liveness/', liveness_view, name='health-liveness'),
+    path('health/readiness/', readiness_view, name='health-readiness'),
+    path('health/detailed/', detailed_health_view, name='health-detailed'),
     path('404/', custom_404_view, name='custom-404'),
     path('profile/', frontend_profile_redirect, name='profile-redirect'),
     path('auth/csrf/', csrf_view, name='auth-csrf'),
@@ -77,6 +86,8 @@ urlpatterns = [
     path('admin/points/adjust/', AdminPointAdjustmentView.as_view(), name='admin-point-adjust'),
     path('admin/audit-logs/', AdminAuditLogListView.as_view(), name='admin-audit-logs'),
     path('admin/farming-reviews/', AdminFarmingReviewListView.as_view(), name='admin-farming-reviews'),
+    path('admin/monitoring/', AdminMonitoringStatusView.as_view(), name='admin-monitoring-status'),
+    path('admin/monitoring/consistency/', AdminPipelineConsistencyView.as_view(), name='admin-pipeline-consistency'),
 ]
 
 

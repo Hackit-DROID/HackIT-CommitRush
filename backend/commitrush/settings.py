@@ -123,8 +123,29 @@ REST_FRAMEWORK = {
 }
 
 # Caching Configuration (PRD §10.2, §20, plan.md M7-T1)
-CACHE_BACKEND = os.environ.get('CACHE_BACKEND', 'django.core.cache.backends.locmem.LocMemCache')
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
+is_test_runner = ('test' in sys.argv) or (os.environ.get('DJANGO_TESTING') == 'True') or (os.environ.get('PYTEST_CURRENT_TEST') is not None)
+_raw_redis_url = os.environ.get('REDIS_URL')
+if not _raw_redis_url:
+    for _alt_key in ('UPSTASH_REDIS_URL', 'REDIS_TLS_URL', 'REDISCLOUD_URL'):
+        if os.environ.get(_alt_key):
+            _raw_redis_url = os.environ[_alt_key]
+            break
+
+if not _raw_redis_url:
+    if os.environ.get('RENDER') or os.environ.get('RENDER_SERVICE_ID'):
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured("REDIS_URL is required when running in production on Render. Silent fallback to localhost is forbidden.")
+    _raw_redis_url = 'redis://127.0.0.1:6379/0'
+
+REDIS_URL = _raw_redis_url
+
+if 'CACHE_BACKEND' in os.environ:
+    CACHE_BACKEND = os.environ['CACHE_BACKEND']
+elif is_test_runner or (not os.environ.get('REDIS_URL') and not os.environ.get('UPSTASH_REDIS_URL') and not os.environ.get('REDIS_TLS_URL')):
+    CACHE_BACKEND = 'django.core.cache.backends.locmem.LocMemCache'
+else:
+    CACHE_BACKEND = 'django.core.cache.backends.redis.RedisCache'
+
 CACHES = {
     'default': {
         'BACKEND': CACHE_BACKEND,
@@ -132,6 +153,7 @@ CACHES = {
         'TIMEOUT': 60,
     }
 }
+
 
 # CORS configuration (PRD §16, §19)
 CORS_ALLOWED_ORIGINS = [
@@ -316,12 +338,17 @@ try:
     STATIC_ROOT.mkdir(parents=True, exist_ok=True)
 except OSError:
     pass
+is_test_runner = ('test' in sys.argv) or (os.environ.get('DJANGO_TESTING') == 'True') or (os.environ.get('PYTEST_CURRENT_TEST') is not None)
 STORAGES = {
     'default': {
         'BACKEND': 'django.core.files.storage.FileSystemStorage',
     },
     'staticfiles': {
-        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+        'BACKEND': (
+            'django.contrib.staticfiles.storage.StaticFilesStorage'
+            if is_test_runner or DEBUG
+            else 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+        ),
     },
 }
 MEDIA_URL = '/media/'
@@ -410,9 +437,33 @@ if GITHUB_REDIRECT_URI:
 
 # Celery & Redis Configuration (PRD §10.1, §13.6, plan.md M2-T4, M4-T3)
 # Redis is the broker, cache, and distributed semaphore backend. Configuration is backed by environment variables.
-REDIS_URL = os.environ.get('REDIS_URL', 'redis://127.0.0.1:6379/0')
+_raw_redis_url = os.environ.get('REDIS_URL')
+if not _raw_redis_url:
+    for _alt_key in ('UPSTASH_REDIS_URL', 'REDIS_TLS_URL', 'REDISCLOUD_URL'):
+        if os.environ.get(_alt_key):
+            _raw_redis_url = os.environ[_alt_key]
+            break
+
+if not _raw_redis_url:
+    if os.environ.get('RENDER') or os.environ.get('RENDER_SERVICE_ID'):
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured("REDIS_URL is required when running in production on Render. Silent fallback to localhost is forbidden.")
+    _raw_redis_url = 'redis://127.0.0.1:6379/0'
+
+REDIS_URL = _raw_redis_url
 CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', REDIS_URL)
 CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
+
+# Upstash TLS configuration for Celery (PRD §10.1, §13.6)
+if CELERY_BROKER_URL.startswith('rediss://'):
+    import ssl
+    CELERY_BROKER_USE_SSL = {
+        'ssl_cert_reqs': ssl.CERT_NONE,
+    }
+    CELERY_REDIS_BACKEND_USE_SSL = {
+        'ssl_cert_reqs': ssl.CERT_NONE,
+    }
+
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -455,6 +506,9 @@ CELERY_TASK_ROUTES = {
     'core.tasks.merge_contribution_task': {'queue': 'merge'},
     'core.tasks.process_merge_queue_task': {'queue': 'merge'},
     'core.tasks.refresh_event_stats_task': {'queue': 'analytics'},
+    'core.tasks.pipeline_health_monitor_task': {'queue': 'analytics'},
+    'core.tasks.beat_heartbeat_task': {'queue': 'analytics'},
+    'core.tasks.worker_heartbeat_task': {'queue': 'default'},
 }
 
 # Semaphore & Concurrency Settings (PRD §10.1, §12.3, Plan M6-T1)
@@ -466,6 +520,14 @@ RECONCILIATION_RECENT_WINDOW_MINUTES = int(os.environ.get('RECONCILIATION_RECENT
 WORKER_LOCK_TIMEOUT_MINUTES = int(os.environ.get('WORKER_LOCK_TIMEOUT_MINUTES', '10'))
 
 CELERY_BEAT_SCHEDULE = {
+    'beat-heartbeat-1min': {
+        'task': 'core.tasks.beat_heartbeat_task',
+        'schedule': float(os.environ.get('BEAT_HEARTBEAT_SECONDS', 60)),  # Every minute
+    },
+    'pipeline-health-monitor-5min': {
+        'task': 'core.tasks.pipeline_health_monitor_task',
+        'schedule': float(os.environ.get('HEALTH_MONITOR_BEAT_SECONDS', 5 * 60)),  # Every 5 minutes
+    },
     'reconcile-recent-repositories-15min': {
         'task': 'core.tasks.reconcile_recent_repositories_task',
         'schedule': float(os.environ.get('RECONCILIATION_BEAT_SECONDS', 15 * 60)),  # Every 15 minutes by default

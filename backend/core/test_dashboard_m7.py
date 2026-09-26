@@ -15,6 +15,7 @@ from core.models import (
     PullRequest,
 )
 from core.points import award_points_for_contribution
+from core.scoring.constants import get_event_today
 
 User = get_user_model()
 
@@ -99,7 +100,7 @@ class DashboardApiTests(TestCase):
         )
 
         # Daily usage for Alice today
-        self.today = timezone.now().date()
+        self.today = get_event_today()
         self.usage_a = DailyContributionUsage.objects.create(
             participant=self.participant_a,
             date=self.today,

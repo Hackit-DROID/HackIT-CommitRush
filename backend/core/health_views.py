@@ -40,8 +40,7 @@ def health_view(request):
     """
     GET /health/
     Health and readiness check endpoint for load balancers, Gunicorn, Kubernetes, and uptime monitoring (PRD §23, §21.1).
-    Checks database connectivity and returns 200 (healthy) or 503 (unhealthy/unavailable).
-    Reports cache readiness status ('connected' or 'degraded').
+    Probes database connectivity and cache responsiveness.
     """
     if request.method not in ['GET', 'HEAD']:
         return HttpResponseNotAllowed(['GET', 'HEAD'])
@@ -63,3 +62,53 @@ def health_view(request):
             'cache': 'connected' if cache_ok else 'degraded',
         }
         return JsonResponse(response_data, status=503)
+
+
+def liveness_view(request):
+    """
+    GET /health/liveness/
+    Lightweight probe confirming the Python/Gunicorn web process is running.
+    """
+    if request.method not in ['GET', 'HEAD']:
+        return HttpResponseNotAllowed(['GET', 'HEAD'])
+    return JsonResponse({'status': 'alive'}, status=200)
+
+
+def readiness_view(request):
+    """
+    GET /health/readiness/
+    Readiness probe verifying DB and cache connectivity before accepting customer traffic.
+    """
+    if request.method not in ['GET', 'HEAD']:
+        return HttpResponseNotAllowed(['GET', 'HEAD'])
+
+    db_ok = check_database()
+    cache_ok = check_cache()
+
+    if db_ok:
+        return JsonResponse({
+            'status': 'ready',
+            'database': 'connected',
+            'cache': 'connected' if cache_ok else 'degraded',
+        }, status=200)
+    return JsonResponse({
+        'status': 'not_ready',
+        'database': 'unavailable',
+        'cache': 'connected' if cache_ok else 'degraded',
+    }, status=503)
+
+
+def detailed_health_view(request):
+    """
+    GET /api/v1/health/detailed/
+    Returns full subsystem health metrics from HealthMonitor.
+    """
+    if request.method not in ['GET', 'HEAD']:
+        return HttpResponseNotAllowed(['GET', 'HEAD'])
+
+    from core.monitoring import HealthMonitor
+    monitor = HealthMonitor()
+    report = monitor.check_system_health(include_consistency=False)
+    http_code = 200 if report.get('overall_status') in ('HEALTHY', 'DEGRADED') else 503
+    return JsonResponse(report, status=http_code)
+

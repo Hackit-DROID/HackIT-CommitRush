@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: commitrush-backend
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: "pip install -r backend/requirements.txt"
+    startCommand: "bash scripts/start_web.sh"
+    healthCheckPath: /health/
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.2
+      - key: DJANGO_SETTINGS_MODULE
+        value: commitrush.settings
+      - key: DEBUG
+        value: "False"
+      - key: DB_ENGINE
+        value: django.db.backends.postgresql
+      - key: DB_SSLMODE
+        value: require
+      - key: RENDER
+        value: "true"
+
+  - type: worker
+    name: commitrush-celery-worker
+    env: python
+    region: oregon
+    plan: starter
+    buildCommand: "pip install -r backend/requirements.txt"
+    startCommand: "bash scripts/start_worker_and_beat.sh"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.2
+      - key: DJANGO_SETTINGS_MODULE
+        value: commitrush.settings
+      - key: DEBUG
+        value: "False"
+      - key: DB_ENGINE
+        value: django.db.backends.postgresql
+      - key: DB_SSLMODE
+        value: require
+      - key: RENDER
+        value: "true"

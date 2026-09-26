@@ -81,6 +81,30 @@ class M9T1PointAwardUnitTests(TestCase):
             points=25,
             status='open',
         )
+        self.issue_50_2 = Issue.objects.create(
+            github_issue_id=777003,
+            project=self.project,
+            number=3,
+            title='50 Point Issue 2',
+            points=50,
+            status='open',
+        )
+        self.issue_25_2 = Issue.objects.create(
+            github_issue_id=777004,
+            project=self.project,
+            number=4,
+            title='25 Point Issue 2',
+            points=25,
+            status='open',
+        )
+        self.issue_25_3 = Issue.objects.create(
+            github_issue_id=777005,
+            project=self.project,
+            number=5,
+            title='25 Point Issue 3',
+            points=25,
+            status='open',
+        )
 
     def _create_merged_contribution(self, issue, pr_num):
         pr = PullRequest.objects.create(
@@ -108,7 +132,7 @@ class M9T1PointAwardUnitTests(TestCase):
         self.assertEqual(res1['points'], 50)
 
         # Second 50-point contribution reaches exact boundary (50 + 50 = 100 == 100)
-        c2 = self._create_merged_contribution(self.issue_50, 2)
+        c2 = self._create_merged_contribution(self.issue_50_2, 2)
         res2 = award_points_for_contribution(c2.id)
         self.assertEqual(res2['status'], 'AWARDED')
         self.assertEqual(res2['points'], 50)
@@ -120,7 +144,7 @@ class M9T1PointAwardUnitTests(TestCase):
     def test_one_above_daily_point_boundary_defers(self):
         """Participant at 100 points attempting to earn 25 more points is DEFERRED (100 + 25 > 100)."""
         c1 = self._create_merged_contribution(self.issue_50, 1)
-        c2 = self._create_merged_contribution(self.issue_50, 2)
+        c2 = self._create_merged_contribution(self.issue_50_2, 2)
         award_points_for_contribution(c1.id)
         award_points_for_contribution(c2.id)
 
@@ -141,8 +165,8 @@ class M9T1PointAwardUnitTests(TestCase):
         self.config.save()
 
         c1 = self._create_merged_contribution(self.issue_25, 1)
-        c2 = self._create_merged_contribution(self.issue_25, 2)
-        c3 = self._create_merged_contribution(self.issue_25, 3)
+        c2 = self._create_merged_contribution(self.issue_25_2, 2)
+        c3 = self._create_merged_contribution(self.issue_25_3, 3)
 
         res1 = award_points_for_contribution(c1.id)
         res2 = award_points_for_contribution(c2.id)

@@ -1,5 +1,6 @@
 import logging
 from django.contrib import admin, messages
+from django.utils import timezone
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from django.db.models import Count
@@ -692,6 +693,10 @@ class ContributionAdmin(admin.ModelAdmin):
                 self.message_user(request, f"Contribution {c.id} is already MERGED.", messages.WARNING)
                 continue
             try:
+                if c.pull_request and not c.pull_request.merged:
+                    c.pull_request.merged = True
+                    c.pull_request.merged_at = c.pull_request.merged_at or timezone.now()
+                    c.pull_request.save(update_fields=['merged', 'merged_at'])
                 transition_contribution(c, 'MERGED', actor=request.user, reason="Admin force-merge override")
                 award_result = award_points_for_contribution(c.id)
                 log_audit_event(

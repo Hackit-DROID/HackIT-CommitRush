@@ -562,6 +562,7 @@ class AdminGitHubSyncRequestSerializer(serializers.Serializer):
         allow_blank=True,
     )
     sync_issues = serializers.BooleanField(required=False, default=True)
+    sync_prs = serializers.BooleanField(required=False, default=True)
     async_mode = serializers.BooleanField(required=False, default=False)
     reason = serializers.CharField(required=False, allow_blank=True, default='Manual admin sync')
 
