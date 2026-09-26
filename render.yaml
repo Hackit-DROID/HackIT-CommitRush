@@ -20,6 +20,9 @@ services:
         value: require
       - key: RENDER
         value: "true"
+      - key: CACHE_BACKEND
+        value: django.core.cache.backends.locmem.LocMemCache
+
 
   - type: worker
     name: commitrush-celery-worker

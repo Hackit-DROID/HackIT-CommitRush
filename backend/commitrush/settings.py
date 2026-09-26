@@ -139,12 +139,8 @@ if not _raw_redis_url:
 
 REDIS_URL = _raw_redis_url
 
-if 'CACHE_BACKEND' in os.environ:
-    CACHE_BACKEND = os.environ['CACHE_BACKEND']
-elif is_test_runner or (not os.environ.get('REDIS_URL') and not os.environ.get('UPSTASH_REDIS_URL') and not os.environ.get('REDIS_TLS_URL')):
-    CACHE_BACKEND = 'django.core.cache.backends.locmem.LocMemCache'
-else:
-    CACHE_BACKEND = 'django.core.cache.backends.redis.RedisCache'
+CACHE_BACKEND = os.environ.get('CACHE_BACKEND', 'django.core.cache.backends.locmem.LocMemCache')
+
 
 CACHES = {
     'default': {
