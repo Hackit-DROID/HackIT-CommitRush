@@ -18,5 +18,7 @@ export function useLeaderboard(filters: LeaderboardFilters = {}) {
     queryFn: () => fetchLeaderboard(filters),
     placeholderData: (previousData) => previousData,
     staleTime: 30_000,
+    refetchInterval: 30_000,
   });
 }
+

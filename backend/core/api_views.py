@@ -60,6 +60,7 @@ from core.serializers import (
     ProjectListSerializer,
     PublicProfileSerializer,
 )
+from core.scoring.constants import get_event_today
 from core.stats import fetch_event_stats
 from core.tasks import sync_repository_task
 
@@ -836,7 +837,7 @@ class DashboardView(APIView):
             raise NotFound("Participant profile not found for authenticated user.")
 
         config = EventConfig.get_solo()
-        today = timezone.now().date()
+        today = get_event_today()
 
         # Authoritative daily usage (read-only query; avoid DB write on GET)
         daily_usage = DailyContributionUsage.objects.filter(
@@ -1127,6 +1128,7 @@ class AdminGitHubSyncView(APIView):
 
         repo_identifier = serializer.validated_data.get('repo') or DEFAULT_MONOREPO
         sync_issues = serializer.validated_data.get('sync_issues', True)
+        sync_prs = serializer.validated_data.get('sync_prs', True)
         async_mode = serializer.validated_data.get('async_mode', False)
         reason = serializer.validated_data.get('reason', 'Manual admin sync')
 
@@ -1145,7 +1147,7 @@ class AdminGitHubSyncView(APIView):
 
         try:
             if async_mode:
-                task = sync_repository_task.delay(repo_identifier, sync_issues=sync_issues)
+                task = sync_repository_task.delay(repo_identifier, sync_issues=sync_issues, sync_prs=sync_prs)
                 task_id = task.id
                 AuditLog.objects.create(
                     actor=request.user,
@@ -1155,6 +1157,7 @@ class AdminGitHubSyncView(APIView):
                     details={
                         'repo': repo_identifier,
                         'sync_issues': sync_issues,
+                        'sync_prs': sync_prs,
                         'async': True,
                         'task_id': task_id,
                         'reason': reason,
@@ -1166,15 +1169,19 @@ class AdminGitHubSyncView(APIView):
                         'task_id': task_id,
                         'repo': repo_identifier,
                         'sync_issues': sync_issues,
+                        'sync_prs': sync_prs,
                     },
                     status=status.HTTP_202_ACCEPTED,
                 )
 
             # Synchronous execution
-            project, repo_created, issues_created, issues_updated = sync_repository_and_issues(
+            res = sync_repository_and_issues(
                 repo_identifier=repo_identifier,
                 sync_issues_flag=sync_issues,
+                sync_prs_flag=sync_prs,
             )
+            project, repo_created, issues_created, issues_updated = res
+            prs_reconciled = getattr(res, 'prs_reconciled', 0)
 
             AuditLog.objects.create(
                 actor=request.user,
@@ -1186,6 +1193,7 @@ class AdminGitHubSyncView(APIView):
                     'repo_created': repo_created,
                     'issues_created': issues_created,
                     'issues_updated': issues_updated,
+                    'prs_reconciled': prs_reconciled,
                     'reason': reason,
                 },
             )
@@ -1200,6 +1208,7 @@ class AdminGitHubSyncView(APIView):
                     },
                     'issues_created': issues_created,
                     'issues_updated': issues_updated,
+                    'prs_reconciled': prs_reconciled,
                 },
                 status=status.HTTP_200_OK,
             )
@@ -1467,6 +1476,68 @@ class AdminFarmingReviewListView(generics.ListAPIView):
         if username_param:
             qs = qs.filter(contribution__participant__github_username__icontains=username_param.strip())
         return qs
+
+
+class AdminMonitoringStatusView(APIView):
+    """
+    GET /api/v1/admin/monitoring/
+    Returns real-time health and operational status across all CommitRush subsystems.
+    """
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
+
+    def get(self, request):
+        from core.monitoring import HealthMonitor
+        include_consistency = request.query_params.get('consistency', 'false').lower() in ('true', '1')
+        monitor = HealthMonitor()
+        report = monitor.check_system_health(include_consistency=include_consistency)
+        return Response(report, status=status.HTTP_200_OK)
+
+
+class AdminPipelineConsistencyView(APIView):
+    """
+    GET /api/v1/admin/monitoring/consistency/
+    POST /api/v1/admin/monitoring/consistency/
+    GET runs consistency check identifying first broken stages.
+    POST runs consistency check with auto_repair=True to automatically heal broken stages.
+    """
+    authentication_classes = [AdminSessionAuthentication]
+    permission_classes = [IsAdministrator]
+
+    def get(self, request):
+        from core.consistency_checker import PipelineConsistencyChecker
+        checker = PipelineConsistencyChecker()
+        pr_number = request.query_params.get('pr')
+        if pr_number:
+            try:
+                pr_num = int(pr_number)
+                res = checker.check_single_pr(pr_num, auto_repair=False)
+                return Response(res, status=status.HTTP_200_OK)
+            except ValueError:
+                return Response({'error': 'Invalid pr number'}, status=status.HTTP_400_BAD_REQUEST)
+
+        limit = int(request.query_params.get('limit', 50))
+        report = checker.check_all_recent_prs(limit=limit, auto_repair=False)
+        return Response(report, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        from core.consistency_checker import PipelineConsistencyChecker
+        checker = PipelineConsistencyChecker()
+        pr_number = request.data.get('pr')
+        auto_repair = request.data.get('auto_repair', True)
+
+        if pr_number:
+            try:
+                pr_num = int(pr_number)
+                res = checker.check_single_pr(pr_num, auto_repair=auto_repair)
+                return Response(res, status=status.HTTP_200_OK)
+            except ValueError:
+                return Response({'error': 'Invalid pr number'}, status=status.HTTP_400_BAD_REQUEST)
+
+        limit = int(request.data.get('limit', 50))
+        report = checker.check_all_recent_prs(limit=limit, auto_repair=auto_repair)
+        return Response(report, status=status.HTTP_200_OK)
+
 
 
 

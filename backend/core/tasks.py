@@ -32,10 +32,11 @@ def sync_repository_task(
     self,
     repo_identifier: str,
     sync_issues: bool = True,
+    sync_prs: bool = True,
     rate_limit_retries: int = 0,
 ) -> dict:
     """
-    Celery task to synchronize repository metadata and issues from GitHub REST API.
+    Celery task to synchronize repository metadata, issues, and pull requests from GitHub REST API.
     Routed to the low-priority 'sync' queue (PRD §10.1, §13.6, plan.md M2-T4).
     
     Rate Limit Policy (PRD §13.6, M2-T4):
@@ -65,11 +66,14 @@ def sync_repository_task(
     client = GitHubClient()
 
     try:
-        project, repo_created, issues_created, issues_updated = sync_repository_and_issues(
+        res = sync_repository_and_issues(
             f"{owner}/{repo}",
             client=client,
             sync_issues_flag=sync_issues,
+            sync_prs_flag=sync_prs,
         )
+        project, repo_created, issues_created, issues_updated = res
+        prs_reconciled = getattr(res, 'prs_reconciled', 0)
         return {
             'status': 'success',
             'repo': f"{owner}/{repo}",
@@ -77,6 +81,7 @@ def sync_repository_task(
             'repo_created': repo_created,
             'issues_created': issues_created,
             'issues_updated': issues_updated,
+            'prs_reconciled': prs_reconciled,
         }
 
     except GitHubRateLimitError as e:
@@ -100,6 +105,7 @@ def sync_repository_task(
             kwargs={
                 'repo_identifier': repo_identifier,
                 'sync_issues': sync_issues,
+                'sync_prs': sync_prs,
                 'rate_limit_retries': rate_limit_retries + 1,
             },
         )
@@ -188,10 +194,11 @@ def process_webhook_event_task(self, webhook_event_id: int) -> dict:
 def reconcile_recent_repositories_task(
     self,
     window_minutes: int | None = None,
+    force: bool = False,
     rate_limit_retries: int = 0,
 ) -> dict:
     """
-    Scheduled Celery beat task to reconcile repositories with no recent webhook activity.
+    Scheduled Celery beat task to reconcile repositories.
     Runs every N minutes (default 15). Routed to low-priority 'sync' queue.
     Rate-limit aware per PRD §13.6 and plan.md M4-T5.
     """
@@ -199,7 +206,7 @@ def reconcile_recent_repositories_task(
 
     client = GitHubClient()
     try:
-        return reconcile_recent_repositories(window_minutes=window_minutes, client=client)
+        return reconcile_recent_repositories(window_minutes=window_minutes, client=client, force=force)
     except GitHubRateLimitError as e:
         logger.warning(
             "GitHub rate limit reached in reconcile_recent_repositories_task (remaining: %s, reset: %s, retry_after: %s)",
@@ -489,4 +496,54 @@ def refresh_event_stats_task(self) -> dict:
     except Exception as e:
         logger.error("Failed refreshing aggregate event stats: %s", e)
         raise self.retry(exc=e, countdown=10, max_retries=3)
+
+
+@shared_task(
+    bind=True,
+    name='core.tasks.pipeline_health_monitor_task',
+    queue='analytics',
+    max_retries=1,
+)
+def pipeline_health_monitor_task(self) -> dict:
+    """
+    Periodic Celery Beat task to run comprehensive health monitoring across all subsystems,
+    check PR pipeline consistency, detect broken stages, and dispatch alerts if issues arise.
+    """
+    from core.monitoring import HealthMonitor
+    monitor = HealthMonitor()
+    report = monitor.check_system_health(include_consistency=True)
+    logger.info("Pipeline health monitor executed. Overall status: %s", report.get('overall_status'))
+    return report
+
+
+@shared_task(
+    bind=True,
+    name='core.tasks.beat_heartbeat_task',
+    queue='analytics',
+    max_retries=1,
+)
+def beat_heartbeat_task(self) -> dict:
+    """
+    Periodic Celery Beat heartbeat task. Updates Redis key 'commitrush:beat:heartbeat'
+    to prove Celery Beat scheduler is actively firing.
+    """
+    from core.monitoring import HealthMonitor
+    HealthMonitor.record_beat_heartbeat()
+    return {'status': 'ok', 'heartbeat': 'beat'}
+
+
+@shared_task(
+    bind=True,
+    name='core.tasks.worker_heartbeat_task',
+    queue='default',
+    max_retries=1,
+)
+def worker_heartbeat_task(self) -> dict:
+    """
+    Worker heartbeat task dispatched by beat or monitor to prove worker queue processing.
+    """
+    from core.monitoring import HealthMonitor
+    HealthMonitor.record_worker_heartbeat()
+    return {'status': 'ok', 'heartbeat': 'worker'}
+
 

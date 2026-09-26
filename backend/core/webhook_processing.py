@@ -113,16 +113,24 @@ def handle_pull_request_event(payload: dict) -> dict:
 
     user_data = pr_data.get('user') or {}
     author_github_id = user_data.get('id') or 0
+    author_login = user_data.get('login') or ''
     head_sha = (pr_data.get('head') or {}).get('sha') or ''
     base_ref = (pr_data.get('base') or {}).get('ref') or 'main'
     is_merged = bool(pr_data.get('merged', False))
     raw_merged_at = pr_data.get('merged_at')
     merged_at = parse_datetime(raw_merged_at) if raw_merged_at else None
+    if raw_merged_at and not is_merged:
+        is_merged = True
 
-    # Resolve author participant if registered
+    # Resolve author participant if registered (by github_id or login fallback)
     participant = None
     if author_github_id:
         participant = Participant.objects.filter(github_id=author_github_id).first()
+    if not participant and author_login:
+        participant = Participant.objects.filter(github_username__iexact=author_login).first()
+        if participant and not participant.github_id and author_github_id:
+            participant.github_id = author_github_id
+            participant.save(update_fields=['github_id'])
 
     # 3. Synchronize PullRequest model
     with transaction.atomic():
@@ -141,7 +149,7 @@ def handle_pull_request_event(payload: dict) -> dict:
         )
 
     # 4. Handle specific PR actions
-    if action in ('opened', 'reopened'):
+    if action in ('opened', 'reopened', 'edited'):
         config = EventConfig.get_solo()
         designated_branch = config.target_branch or 'main'
         if base_ref != designated_branch:
@@ -168,6 +176,19 @@ def handle_pull_request_event(payload: dict) -> dict:
                 project=project,
                 number__in=extracted_numbers,
             ).order_by('id').first()
+            if not matching_issue:
+                from core.github_sync import GitHubClient, sync_issue
+                client = GitHubClient()
+                for num in extracted_numbers:
+                    try:
+                        issue_payload = client.get_issue(project.owner, project.name, num)
+                        if issue_payload and 'pull_request' not in issue_payload:
+                            synced_issue, _ = sync_issue(project, issue_payload)
+                            if synced_issue:
+                                matching_issue = synced_issue
+                                break
+                    except Exception as err:
+                        logger.debug("Failed on-demand issue fetch for %s#%d: %s", project.full_name, num, err)
 
         # Respect submissions_paused (M4-T4, PRD §12.6, §15, plan.md M4-T4)
         config = EventConfig.get_solo()
@@ -240,7 +261,7 @@ def handle_pull_request_event(payload: dict) -> dict:
             'contributions_updated': len(contributions),
         }
 
-    elif action == 'closed':
+    elif action in ('closed', 'merged'):
         with transaction.atomic():
             pr_obj.base_branch = base_ref
             if is_merged:
@@ -268,6 +289,19 @@ def handle_pull_request_event(payload: dict) -> dict:
                                 project=project,
                                 number__in=extracted_numbers,
                             ).order_by('id').first()
+                            if not matching_issue:
+                                from core.github_sync import GitHubClient, sync_issue
+                                client = GitHubClient()
+                                for num in extracted_numbers:
+                                    try:
+                                        issue_payload = client.get_issue(project.owner, project.name, num)
+                                        if issue_payload and 'pull_request' not in issue_payload:
+                                            synced_issue, _ = sync_issue(project, issue_payload)
+                                            if synced_issue:
+                                                matching_issue = synced_issue
+                                                break
+                                    except Exception as err:
+                                        logger.debug("Failed on-demand issue fetch for %s#%d: %s", project.full_name, num, err)
                             if matching_issue:
                                 contrib = Contribution.objects.create(
                                     participant=participant,
@@ -289,6 +323,12 @@ def handle_pull_request_event(payload: dict) -> dict:
                         award_points_for_contribution(contrib.id)
                     except Exception as e:
                         logger.exception("Error awarding points for merged contribution %s: %s", contrib.id, e)
+
+                try:
+                    from django.core.cache import cache
+                    cache.set('commitrush:last_pr_processed_time', timezone.now().isoformat(), timeout=86400)
+                except Exception:
+                    pass
 
                 logger.info("PR #%d merged in %s; transitioned %d contribution(s) to MERGED", pr_number, project.full_name, len(contributions))
                 return {

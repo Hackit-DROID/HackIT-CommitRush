@@ -29,10 +29,14 @@ def has_recent_webhook_activity(project: Project, window_minutes: int) -> bool:
     ).exists()
 
 
-def reconcile_repository(project: Project, client: GitHubClient | None = None) -> dict:
+def reconcile_repository(
+    project: Project,
+    client: GitHubClient | None = None,
+    sync_issues: bool = True,
+) -> dict:
     """
     Reconcile a single tracked repository against GitHub REST API (PRD §13.4, plan.md M4-T5).
-    - Fetches all issues (open and closed) and synchronizes them into Issue/IssueLabel models.
+    - Fetches all issues (open and closed) and synchronizes them into Issue/IssueLabel models (if sync_issues=True).
     - Fetches all pull requests and feeds them through handle_pull_request_event for idempotent
       PullRequest caching and Contribution matching/transitions.
     
@@ -51,8 +55,11 @@ def reconcile_repository(project: Project, client: GitHubClient | None = None) -
     logger.info("Starting reconciliation for repository %s", project.full_name)
 
     # 1. Reconcile Issues
-    issues_data = client.get_issues(owner, repo, state='all')
-    issues_created, issues_updated = sync_issues_for_project(project, issues_data)
+    issues_created = 0
+    issues_updated = 0
+    if sync_issues:
+        issues_data = client.get_issues(owner, repo, state='all')
+        issues_created, issues_updated = sync_issues_for_project(project, issues_data)
 
     # 2. Reconcile Pull Requests
     prs_data = client.get_pull_requests(owner, repo, state='all')
@@ -117,11 +124,13 @@ def reconcile_repository(project: Project, client: GitHubClient | None = None) -
 def reconcile_recent_repositories(
     window_minutes: int | None = None,
     client: GitHubClient | None = None,
+    force: bool = False,
 ) -> dict:
     """
     Scheduled Celery beat task every N minutes (configurable, e.g. 15).
-    Pulls recent PR/issue activity per tracked repo via REST API for repos with
-    NO recent webhook activity in the window (PRD §13.4, plan.md M4-T5).
+    Pulls recent PR/issue activity per tracked repo via REST API.
+    If force=True, reconciles all enabled projects regardless of recent webhook activity.
+    Otherwise skips projects with active webhooks within the window.
     """
     if window_minutes is None:
         window_minutes = getattr(settings, 'RECONCILIATION_RECENT_WINDOW_MINUTES', 15)
@@ -135,13 +144,14 @@ def reconcile_recent_repositories(
     errors = []
 
     logger.info(
-        "Running 15-minute reconciliation across %d enabled project(s) with window=%d min",
+        "Running reconciliation across %d enabled project(s) (window=%d min, force=%s)",
         len(enabled_projects),
         window_minutes,
+        force,
     )
 
     for proj in enabled_projects:
-        if has_recent_webhook_activity(proj, window_minutes):
+        if not force and has_recent_webhook_activity(proj, window_minutes):
             logger.info("Skipping reconciliation for %s: active webhook activity within %d min", proj.full_name, window_minutes)
             skipped.append({'project_id': proj.id, 'full_name': proj.full_name, 'reason': 'recent_webhook_activity'})
             continue
@@ -156,6 +166,12 @@ def reconcile_recent_repositories(
             logger.exception("Error during reconciliation for %s", proj.full_name)
             errors.append({'project_id': proj.id, 'full_name': proj.full_name, 'error': str(e)})
 
+    try:
+        from django.core.cache import cache
+        cache.set('commitrush:last_reconciliation_time', timezone.now().isoformat(), timeout=86400)
+    except Exception:
+        pass
+
     return {
         'status': 'completed',
         'window_minutes': window_minutes,
@@ -167,6 +183,7 @@ def reconcile_recent_repositories(
         'skipped': skipped,
         'errors': errors,
     }
+
 
 
 def reconcile_all_repositories_nightly(client: GitHubClient | None = None) -> dict:

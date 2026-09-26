@@ -14,6 +14,7 @@ from core.models import (
     PullRequest,
 )
 from core.points import award_points_for_contribution
+from core.scoring.constants import get_event_today
 
 User = get_user_model()
 
@@ -97,7 +98,7 @@ class TransactionalPointAwardTests(TestCase):
         self.assertEqual(pt.contribution, self.contribution)
 
         # Verify DailyContributionUsage tracked
-        today = timezone.now().date()
+        today = get_event_today()
         usage = DailyContributionUsage.objects.get(participant=self.participant, date=today)
         self.assertEqual(usage.contributions_count, 1)
         self.assertEqual(usage.points_count, 50)
@@ -121,7 +122,7 @@ class TransactionalPointAwardTests(TestCase):
 
     def test_daily_contribution_cap_exceeded_defers_points(self):
         # Daily contribution cap is 3. Set existing usage to 3.
-        today = timezone.now().date()
+        today = get_event_today()
         DailyContributionUsage.objects.create(
             participant=self.participant,
             date=today,
@@ -147,7 +148,7 @@ class TransactionalPointAwardTests(TestCase):
 
     def test_daily_points_cap_exceeded_defers_points(self):
         # Daily points cap is 150. If user has 120 points and tries to earn 50 (120+50 = 170 > 150)
-        today = timezone.now().date()
+        today = get_event_today()
         DailyContributionUsage.objects.create(
             participant=self.participant,
             date=today,
@@ -264,7 +265,7 @@ class ConcurrentPointAwardRaceTests(TransactionTestCase):
         self.participant.refresh_from_db()
         self.assertEqual(self.participant.total_points, 100)
 
-        today = timezone.now().date()
+        today = get_event_today()
         usage = DailyContributionUsage.objects.get(participant=self.participant, date=today)
         self.assertEqual(usage.contributions_count, 2)
         self.assertEqual(usage.points_count, 100)

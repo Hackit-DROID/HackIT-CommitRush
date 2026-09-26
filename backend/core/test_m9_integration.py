@@ -27,6 +27,7 @@ from core.github_sync import (
 )
 from core.merge_service import execute_merge, claim_next_approved_contribution
 from core.points import award_points_for_contribution
+from core.scoring.constants import get_event_today
 from core.state_machine import transition_contribution
 from core.validation import validate_contribution
 from core.webhook_processing import process_webhook_event
@@ -170,7 +171,7 @@ class M9T2EndToEndPipelineIntegrationTests(TestCase):
         self.assertEqual(pt.points, 100)
 
         # Daily usage
-        today = timezone.now().date()
+        today = get_event_today()
         usage = DailyContributionUsage.objects.get(participant=self.participant, date=today)
         self.assertEqual(usage.contributions_count, 1)
         self.assertEqual(usage.points_count, 100)

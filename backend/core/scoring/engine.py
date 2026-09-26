@@ -68,10 +68,10 @@ class ScoringEngine:
 
         # Step 3: Base point calculation
         issue = getattr(contribution, 'issue', None)
-        if issue and getattr(issue, 'difficulty', None):
-            base_points = get_difficulty_points(issue.difficulty, getattr(issue, 'points', 10) or 10)
-        elif issue and getattr(issue, 'points', None) is not None and issue.points > 0:
+        if issue and getattr(issue, 'points', None) is not None and issue.points > 0:
             base_points = issue.points
+        elif issue and getattr(issue, 'difficulty', None):
+            base_points = get_difficulty_points(issue.difficulty, getattr(issue, 'points', 10) or 10)
         else:
             base_points = 10
 
@@ -122,7 +122,7 @@ class ScoringEngine:
             final_awarded_points = 0
             cap_applied = 'Daily limit'
             status = 'DEFERRED'
-            reason = f"DAILY LIMIT REACHED: Participant already reached the {daily_points_max}-point daily limit for today ({daily_points_before}/{daily_points_max})"
+            reason = f"Daily limit exceeded: DAILY LIMIT REACHED: Participant already reached the {daily_points_max}-point daily limit for today ({daily_points_before}/{daily_points_max})"
         elif points_after_pr_cap > daily_allowance_remaining:
             # Points exceed remaining daily allowance
             if config.allow_partial_daily_points:
@@ -137,7 +137,7 @@ class ScoringEngine:
                 final_awarded_points = 0
                 cap_applied = 'Daily limit'
                 status = 'DEFERRED'
-                reason = f"NOT COUNTED - DAILY LIMIT: Adding {points_after_pr_cap} points would exceed today's {daily_points_max}-point daily limit ({daily_points_before}/{daily_points_max})"
+                reason = f"Daily limit exceeded: NOT COUNTED - DAILY LIMIT: Adding {points_after_pr_cap} points would exceed today's {daily_points_max}-point daily limit ({daily_points_before}/{daily_points_max})"
         else:
             # Under all caps
             final_awarded_points = points_after_pr_cap

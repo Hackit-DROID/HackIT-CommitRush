@@ -23,6 +23,7 @@ from core.models import (
     WebhookEvent,
 )
 from core.crash_recovery import requeue_stale_contributions
+from core.scoring.constants import get_event_today
 from core.github_sync import (
     GitHubAPIError,
     GitHubMergeConflictError,
@@ -265,18 +266,26 @@ class M9T4ChaosAndFailureTests(TransactionTestCase):
 
         # Simulate 5 concurrent webhook deliveries of the EXACT same delivery_id
         def send_duplicate():
-            close_old_connections()
-            try:
-                event, created = WebhookEvent.objects.get_or_create(
-                    delivery_id=delivery_id,
-                    defaults={'event_type': 'pull_request', 'payload': payload},
-                )
-                if created:
-                    process_webhook_event(event)
-                    return 'created'
-                return 'duplicate'
-            finally:
+            import time
+            from django.db.utils import OperationalError
+            for attempt in range(15):
                 close_old_connections()
+                try:
+                    event, created = WebhookEvent.objects.get_or_create(
+                        delivery_id=delivery_id,
+                        defaults={'event_type': 'pull_request', 'payload': payload},
+                    )
+                    if created:
+                        process_webhook_event(event)
+                        return 'created'
+                    return 'duplicate'
+                except OperationalError as e:
+                    if 'locked' in str(e).lower() and attempt < 14:
+                        time.sleep(0.05 * (attempt + 1))
+                        continue
+                    raise
+                finally:
+                    close_old_connections()
 
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures = [executor.submit(send_duplicate) for _ in range(5)]
@@ -347,7 +356,7 @@ class M9T4ChaosAndFailureTests(TransactionTestCase):
         self.assertEqual(awarded_txns.count(), 2)
         self.assertEqual(deferred_txns.count(), 3)
 
-        today = timezone.now().date()
+        today = get_event_today()
         usage = DailyContributionUsage.objects.get(participant=self.participant, date=today)
         self.assertEqual(usage.contributions_count, 2)
         self.assertEqual(usage.points_count, 100)

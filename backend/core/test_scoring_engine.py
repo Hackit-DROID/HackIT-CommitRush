@@ -22,6 +22,7 @@ from core.scoring import (
     detect_farming_signals,
 )
 from core.points import award_points_for_contribution
+from core.scoring.constants import get_event_today
 
 User = get_user_model()
 
@@ -466,7 +467,7 @@ class ScoringEnginePipelineTests(TestCase):
 
     def test_partial_daily_points_awarded_when_allowance_exceeded(self):
         # Daily limit: 100. Pre-seed daily usage with 80 points.
-        today = timezone.now().date()
+        today = get_event_today()
         DailyContributionUsage.objects.create(
             participant=self.participant,
             date=today,
@@ -502,7 +503,7 @@ class ScoringEnginePipelineTests(TestCase):
         self.config.allow_partial_daily_points = False
         self.config.save()
 
-        today = timezone.now().date()
+        today = get_event_today()
         DailyContributionUsage.objects.create(
             participant=self.participant,
             date=today,
@@ -528,7 +529,7 @@ class ScoringEnginePipelineTests(TestCase):
         self.assertEqual(breakdown.final_awarded_points, 0)
 
     def test_daily_points_exhausted_defers_points(self):
-        today = timezone.now().date()
+        today = get_event_today()
         DailyContributionUsage.objects.create(
             participant=self.participant,
             date=today,
@@ -547,7 +548,7 @@ class ScoringEnginePipelineTests(TestCase):
         self.assertEqual(self.participant.total_points, 100)
 
     def test_daily_contribution_count_limit_exceeded(self):
-        today = timezone.now().date()
+        today = get_event_today()
         DailyContributionUsage.objects.create(
             participant=self.participant,
             date=today,
@@ -627,7 +628,7 @@ class LeaderboardDailyAllowanceAPITests(TestCase):
             merged_count=3,
         )
 
-        today = timezone.now().date()
+        today = get_event_today()
         DailyContributionUsage.objects.create(
             participant=self.participant,
             date=today,
